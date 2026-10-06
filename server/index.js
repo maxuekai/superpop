@@ -4,6 +4,7 @@
 import express from 'express';
 import http from 'node:http';
 import { Server } from 'socket.io';
+import { fileURLToPath } from 'node:url';
 
 const app = express();
 const server = http.createServer(app);
@@ -15,7 +16,7 @@ const players = [];
 app.use('/src', express.static('src'));
 app.use('/assets', express.static('assets'));
 app.get('/', (req, res) => {
-    res.sendFile(new URL('../index.html', import.meta.url).pathname);
+    res.sendFile(fileURLToPath(new URL('../index.html', import.meta.url)));
 });
 
 io.on('connection', (socket) => {
@@ -68,6 +69,7 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(3000, () => {
-    console.log('listening on 3000');
+const port = process.env.PORT || 3000;
+server.listen(port, () => {
+    console.log(`listening on ${port}`);
 });

@@ -8,7 +8,7 @@ superpop 半成品待办清单。重构（`refactor/modernize` 分支）已把�
 - [ ] 客户端用 Map 管理所有远程玩家（旧代码只有一个 `anotherball` 变量，只支持一个对手）
 - [ ] 远程玩家位置插值平滑，避免抖动
 - [ ] 断线清理：服务端在 `disconnect` 里广播玩家离开，客户端移除对应小球
-- [ ] 验证 `npm install && npm run server` 在当前依赖版本（express ^4.19 / socket.io ^4.7）下可用
+- [x] 验证 `npm install && npm run server` 在当前依赖版本（express ^4.19 / socket.io ^4.7）下可用
 
 ## 玩法
 
@@ -52,6 +52,6 @@ superpop 半成品待办清单。重构（`refactor/modernize` 分支）已把�
 
 ## 工程
 
-- [ ] 确认 `server/index.js` 里 `res.sendFile` 的路径写法在 Windows / Linux 都正确（当前用 `import.meta.url` 拼接）
+- [x] 确认 `server/index.js` 里 `res.sendFile` 的路径写法在 Windows / Linux 都正确（已改用 `fileURLToPath` 转换并实测通过）
 - [ ] 加最小化测试或 smoke 检查（哪怕只是 `node --check` 所有 js）
 - [ ] CI（可选）

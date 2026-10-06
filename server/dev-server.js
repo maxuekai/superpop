@@ -1,10 +1,11 @@
 // 零依赖静态文件服务器：开发预览用，不需要 npm install
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
-import { extname, join, normalize, sep } from 'node:path';
+import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
+// resolve 去掉目录 URL 自带的结尾分隔符，保证下面的 root + sep 前缀判断正确
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = process.env.PORT || 3000;
 
 const contentTypes = {
@@ -26,8 +27,8 @@ const server = http.createServer(async (req, res) => {
             pathname = '/index.html';
         }
 
-        const filePath = join(root, normalize(pathname));
-        if (!filePath.startsWith(root + sep) && filePath !== join(root, 'index.html')) {
+        const filePath = resolve(root, '.' + pathname);
+        if (filePath !== root && !filePath.startsWith(root + sep)) {
             res.writeHead(403);
             res.end('Forbidden');
             return;
