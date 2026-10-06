@@ -63,10 +63,11 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 
 ## 关键行为（重构时勿意外改变）
 
-- 世界固定 1024×768；画布/视口随窗口变化，缩放规则见 `config.js` 的 `VIEW`：屏幕长边锚定 `VIEW.longEdgeWorld` 个世界单位，但不小于"窗口装下整个世界"的缩放（视口永不超过世界，否则相机钳制出负坐标）。
+- 世界固定 1024×768；画布/视口随窗口变化，缩放规则见 `config.js` 的 `VIEW`：屏幕长边锚定 `VIEW.longEdgeWorld` 个世界单位，并按 `(r/初始半径)^VIEW.zoomExponent` 随体型放大视距，但不小于"窗口装下整个世界"的缩放（视口永不超过世界，否则相机钳制出负坐标）。
 - 渲染按 `devicePixelRatio` 缩放，`Game.draw` 每帧 `setTransform` 后平移到相机视口，Map/Player 直接用世界坐标绘制。
-- 每帧移动量 = speedX / 60（`PLAYER.speedDivisor`）；摇杆直接写 `player.speedX/speedY`，松手（touchend）归零。
-- 食物不烤进地图：背景只生成一次，食物每帧按视口动态绘制；吃掉一颗立即重生一颗（总量恒定 `FOOD.count`），每颗 `player.r += 0.5`。
+- 每帧移动量 = speedX / (speedDivisor + 超出初始半径部分 × slowdownPerRadius)，越大越慢；摇杆直接写 `player.speedX/speedY`，松手（touchend）归零。
+- 食物不烤进地图：背景只生成一次，食物每帧按视口动态绘制；吃掉一颗立即重生一颗（总量恒定 `FOOD.count`），重生位置避开玩家（距离 ≥ r+40）；每颗 `player.r += 0.5` 并给视觉半径一次弹簧回弹（见 player.js 的 displayR/rVel）。
+- 玩家出生在地图内随机位置（带边距）。
 - 体重面板 = r² 取整（初始 r=10 → 100kg），吃食物时更新。
 - 玩家越界钳制：圆心离边缘至少一个 `r`（原 `r/2` 为 bug，已修）。
 - 摇杆是浮动模式（touch 事件）：按住屏幕任意位置，面板在该处出现，拖动控制方向，松手消失且球停；多指只认第一根手指。桌面鼠标不可用（TODO.md「输入」）。

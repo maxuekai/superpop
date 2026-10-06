@@ -1,5 +1,6 @@
 body {
-    background-color: #eee;
+    /* 与地图底色一致，JS 画布渲染完成前也不刺眼 */
+    background-color: #071e1c;
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     /* 手机上禁页面滚动/橡皮筋，游戏区域占满整屏 */
     overflow: hidden;
@@ -18,18 +19,17 @@ body {
 }
 
 .weight-panel {
-    width: 120px;
-    height: 30px;
+    padding: 8px 18px;
+    border-radius: 999px;
 
-    font-size: 16px;
+    font-size: 15px;
     color: #fff;
-    line-height: 30px;
-    text-align: center;
-    background-color: rgba(0, 0, 0, 0.5);
+    line-height: 1.4;
+    background-color: rgba(0, 0, 0, 0.45);
 
     position: fixed;
-    top: 0;
-    left: 0;
+    top: 12px;
+    left: 12px;
     z-index: 1;
 }
 
