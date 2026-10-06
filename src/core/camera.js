@@ -28,6 +28,17 @@ export class Camera {
         this.yDeadZone = yDeadZone;
     }
 
+    // 窗口尺寸变化时更新视口大小（单位：世界坐标），并同步死区
+    setViewSize(width, height) {
+        this.wView = width;
+        this.hView = height;
+        this.viewportRect.set(this.xView, this.yView, width, height);
+        if (this.followed !== null) {
+            this.xDeadZone = width / 2;
+            this.yDeadZone = height / 2;
+        }
+    }
+
     update() {
         if (this.followed !== null) {
             // 右超出

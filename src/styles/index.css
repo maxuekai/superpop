@@ -1,6 +1,20 @@
 body {
     background-color: #eee;
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    /* 手机上禁页面滚动/橡皮筋，游戏区域占满整屏 */
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
+/* 画布铺满窗口（实际像素由 JS 按 devicePixelRatio 设置） */
+#ball {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    touch-action: none;
 }
 
 .weight-panel {
@@ -16,6 +30,7 @@ body {
     position: fixed;
     top: 0;
     left: 0;
+    z-index: 1;
 }
 
 .control-panel {
@@ -28,6 +43,9 @@ body {
     position: fixed;
     bottom: 50px;
     left: 40px;
+    z-index: 1;
+    /* 摇杆拖动不触发页面滚动/缩放 */
+    touch-action: none;
 }
 
 .control-panel .direction-control {
@@ -54,6 +72,8 @@ body {
     position: fixed;
     right: 40px;
     bottom: 50px;
+    z-index: 1;
+    touch-action: none;
 }
 
 .division span {

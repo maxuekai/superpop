@@ -62,6 +62,9 @@ export class Joystick {
                 this.dragging.style.left = '50%';
                 this.dragging.style.top = '50%';
                 this.dragging = null;
+                // 松手即停（原来只复位摇杆头、不归零速度，球会一直滚）
+                this.player.speedX = 0;
+                this.player.speedY = 0;
                 break;
         }
     }

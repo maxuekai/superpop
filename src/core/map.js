@@ -1,59 +1,42 @@
-import { FOOD, MAP_IMAGE_SRC } from '../config.js';
+import { MAP_IMAGE_SRC } from '../config.js';
 
-// 地图：把背景图和食物点画到离屏 canvas 上，缓存为一张大图，
-// 绘制时按相机视口裁剪出当前可见区域
+// 地图：把背景图烤到一张离屏 canvas 上只烤一次，绘制时按相机视口裁剪出可见区域。
+// 食物不烤进地图，由 Game 每帧按视口动态绘制（吃/重生都不用重烤大图）。
 export class Map {
     constructor(width, height) {
         this.width = width;
         this.height = height;
-        this.image = new Image();
-    }
-
-    // 食物变化后重新生成整张地图（开销大，见 TODO.md「性能」）
-    generate(foodList) {
-        const ctx = document.createElement('canvas').getContext('2d');
-        ctx.canvas.width = this.width;
-        ctx.canvas.height = this.height;
+        this.image = document.createElement('canvas');
+        this.image.width = width;
+        this.image.height = height;
+        this.ready = false;
 
         const img = new Image();
         img.src = MAP_IMAGE_SRC;
         img.onload = () => {
-            ctx.drawImage(img, 0, 0, this.width, this.height);
-            this.drawFood(ctx, foodList);
-            this.image.src = ctx.canvas.toDataURL('image/jpg');
-            ctx = null;
+            this.image.getContext('2d').drawImage(img, 0, 0, this.width, this.height);
+            this.ready = true;
         };
     }
 
-    draw(context, xView, yView) {
+    // 视口（世界坐标）内的可见部分画到屏幕上；调用处需已把上下文平移到世界坐标系
+    draw(context, camera) {
+        if (!this.ready) {
+            return;
+        }
+
         // 开始裁剪的位置
-        let sx = xView;
-        let sy = yView;
+        const sx = Math.max(0, camera.xView);
+        const sy = Math.max(0, camera.yView);
 
         // 被裁剪的区域大小，不超出图片边界
-        let sWidth = context.canvas.width;
-        let sHeight = context.canvas.height;
-        if (this.image.width - sx < sWidth) {
-            sWidth = this.image.width - sx;
-        }
-        if (this.image.height - sy < sHeight) {
-            sHeight = this.image.height - sy;
+        const sWidth = Math.min(camera.wView, this.image.width - sx);
+        const sHeight = Math.min(camera.hView, this.image.height - sy);
+        if (sWidth <= 0 || sHeight <= 0) {
+            return;
         }
 
-        // 在画布上从 (0, 0) 开始放置
-        context.drawImage(this.image, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
-    }
-
-    drawFood(context, foodList) {
-        for (const food of foodList) {
-            context.save();
-            context.fillStyle = food.color;
-            context.beginPath();
-            context.arc(food.x, food.y, FOOD.radius, 0, Math.PI * 2);
-            context.closePath();
-            context.stroke();
-            context.fill();
-            context.restore();
-        }
+        // 目标位置与裁剪区域同坐标（调用处已做 translate）
+        context.drawImage(this.image, sx, sy, sWidth, sHeight, sx, sy, sWidth, sHeight);
     }
 }

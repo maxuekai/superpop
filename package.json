@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "node server/dev-server.js",
-    "server": "node server/index.js"
+    "server": "node server/index.js",
+    "test": "node scripts/check.js"
   },
   "keywords": [
     "游戏",
@@ -16,5 +17,8 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "qrcode": "^1.5.4"
   }
 }

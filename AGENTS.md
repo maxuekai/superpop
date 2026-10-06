@@ -6,16 +6,17 @@
 
 superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩家控制一个小球在地图里移动，吃食物变大。
 
-当前状态：**单机 demo**。核心循环（移动 / 相机跟随 / 吃食物变大）可用；联机、玩家互吃、分裂等能力均未实现，清单见 [TODO.md](TODO.md)。
+当前状态：**单机可玩**（手机浏览器扫码即玩：摇杆移动、吃食物长大、体重实时显示）。联机、玩家互吃、分裂等能力未实现，清单见 [TODO.md](TODO.md)。
 
 ## 运行
 
 | 命令 | 作用 | 依赖 |
 |---|---|---|
-| `npm run dev` | 零依赖静态服务器，http://localhost:3000 | 无，可直接运行 |
+| `npm run dev` | 静态服务器，http://localhost:3000；启动时打印局域网 URL 和手机扫码用的二维码 | 无（二维码需可选的 devDependency `qrcode`，没装则只打印 URL） |
 | `npm run server` | 多人联机服务端（express + socket.io） | 需先 `npm install` |
+| `npm test` | smoke 检查：对所有 js 跑 `node --check` | 无 |
 
-客户端是**原生 ES modules**，没有构建步骤。`server/dev-server.js` 只是开发预览用；联机服务端在 `server/index.js`。
+客户端是**原生 ES modules**，没有构建步骤。`server/dev-server.js` 只是开发预览用；联机服务端在 `server/index.js`。手机游玩：连同一 Wi-Fi，扫启动日志里的二维码（或浏览器输 `http://<电脑IP>:3000`）。
 
 ## Node.js 环境
 
@@ -29,13 +30,13 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 ```
 ├── index.html              # 页面：canvas + 体重面板 + 摇杆 + 分裂按钮
 ├── src/
-│   ├── main.js             # 入口：window load 后启动 Game + Joystick
-│   ├── config.js           # 全部常量（世界/画布/食物/玩家/摇杆/颜色）
+│   ├── main.js             # 入口：启动 Game + Joystick，监听 resize/orientationchange
+│   ├── config.js           # 全部常量（世界/视野缩放/食物/玩家/摇杆/颜色）
 │   ├── core/
-│   │   ├── game.js         # 游戏主循环：update + draw，吃食物逻辑
-│   │   ├── camera.js       # 死区跟随相机，视口钳制在世界内
+│   │   ├── game.js         # 游戏主循环：自适应渲染、吃食物与重生、体重面板
+│   │   ├── camera.js       # 死区跟随相机，视口钳制在世界内，支持视口尺寸变化
 │   │   ├── player.js       # 玩家小球：移动、边界钳制、绘制、canEat
-│   │   ├── map.js          # 地图：背景+食物烤成一张大图，按视口裁剪
+│   │   ├── map.js          # 地图：背景图只烤一次，按视口裁剪
 │   │   ├── rectangle.js    # 矩形工具：within / overlaps
 │   │   └── utils.js        # 数学小函数
 │   ├── input/
@@ -44,8 +45,10 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 │   │   └── client.js       # 联机客户端占位（未实现）
 │   └── styles/             # reset.css + index.css
 ├── server/
-│   ├── dev-server.js       # 零依赖静态服务器（npm run dev）
+│   ├── dev-server.js       # 静态服务器（npm run dev，打印局域网 URL + 二维码）
 │   └── index.js            # 联机服务端（npm run server，未接通）
+├── scripts/
+│   └── check.js            # smoke 检查（npm test）
 └── assets/img/bg.jpg       # 地图背景图
 ```
 
@@ -59,8 +62,10 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 
 ## 关键行为（重构时勿意外改变）
 
-- 世界固定 1024×768，画布固定 667×375，不随窗口变化。
-- 每帧移动量 = speedX / 60（`PLAYER.speedDivisor`）；摇杆直接写 `player.speedX/speedY`。
-- 食物画进地图大图（`Map.generate`），每吃一颗重绘全图并 `r += 0.5`。
-- 玩家越界钳制用的是 `r/2`（疑似 bug，见 TODO.md，重构未"顺手修复"）。
-- 摇杆只有 touch 事件，桌面鼠标无法操作。
+- 世界固定 1024×768；画布/视口随窗口变化，缩放规则见 `config.js` 的 `VIEW`：屏幕长边锚定 `VIEW.longEdgeWorld` 个世界单位，但不小于"窗口装下整个世界"的缩放（视口永不超过世界，否则相机钳制出负坐标）。
+- 渲染按 `devicePixelRatio` 缩放，`Game.draw` 每帧 `setTransform` 后平移到相机视口，Map/Player 直接用世界坐标绘制。
+- 每帧移动量 = speedX / 60（`PLAYER.speedDivisor`）；摇杆直接写 `player.speedX/speedY`，松手（touchend）归零。
+- 食物不烤进地图：背景只生成一次，食物每帧按视口动态绘制；吃掉一颗立即重生一颗（总量恒定 `FOOD.count`），每颗 `player.r += 0.5`。
+- 体重面板 = r² 取整（初始 r=10 → 100kg），吃食物时更新。
+- 玩家越界钳制：圆心离边缘至少一个 `r`（原 `r/2` 为 bug，已修）。
+- 摇杆只有 touch 事件，桌面鼠标不可用（TODO.md「输入」）。

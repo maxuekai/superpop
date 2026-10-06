@@ -17,27 +17,27 @@ export class Player {
         this.x += this.speedX / this.speed;
         this.y += this.speedY / this.speed;
 
-        // 限制在地图内
-        // TODO: 这里用的是 r/2，但画圆时 r 是半径，疑似 bug，应改为 r
-        if (this.x - this.r / 2 < 0) {
-            this.x = this.r / 2;
+        // 限制在地图内：圆心至少离边缘一个半径（r 是半径，原来错写成 r/2）
+        if (this.x - this.r < 0) {
+            this.x = this.r;
         }
-        if (this.y - this.r / 2 < 0) {
-            this.y = this.r / 2;
+        if (this.y - this.r < 0) {
+            this.y = this.r;
         }
-        if (this.x + this.r / 2 > worldWidth) {
-            this.x = worldWidth - this.r / 2;
+        if (this.x + this.r > worldWidth) {
+            this.x = worldWidth - this.r;
         }
-        if (this.y + this.r / 2 > worldHeight) {
-            this.y = worldHeight - this.r / 2;
+        if (this.y + this.r > worldHeight) {
+            this.y = worldHeight - this.r;
         }
     }
 
-    draw(context, xView, yView) {
+    // 调用处需已把上下文平移到世界坐标系
+    draw(context) {
         context.save();
         context.fillStyle = this.bColor;
         context.beginPath();
-        context.arc(this.x - xView, this.y - yView, this.r, 0, Math.PI * 2);
+        context.arc(this.x, this.y, this.r, 0, Math.PI * 2);
         context.closePath();
         context.stroke();
         context.fill();
