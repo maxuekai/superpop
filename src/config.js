@@ -4,7 +4,7 @@ export const WORLD = { width: 1024, height: 768 };
 // 实际渲染时会取「按此换算的缩放」和「窗口能装下整张地图的缩放」中较大的一个，
 // 保证视口永远不超过世界大小（否则相机钳制会出问题）。
 export const VIEW = { longEdgeWorld: 900 };
-export const FOOD = { count: 100, radius: 2 };
+export const FOOD = { count: 200, radius: 2 };
 export const PLAYER = {
     radius: 10,
     // speedX/speedY 每帧除以该值，相当于速度分母
