@@ -1,5 +1,5 @@
 import { PLAYER } from '../config.js';
-import { distance } from './utils.js';
+import { distance, shadeColor } from './utils.js';
 
 // 玩家小球
 export class Player {
@@ -32,16 +32,34 @@ export class Player {
         }
     }
 
+    // 立体细胞质感：径向渐变（左上受光、右下渐暗）+ 暗描边 + 高光点
     // 调用处需已把上下文平移到世界坐标系
     draw(context) {
-        context.save();
-        context.fillStyle = this.bColor;
+        const gradient = context.createRadialGradient(
+            this.x - this.r * 0.35,
+            this.y - this.r * 0.35,
+            this.r * 0.1,
+            this.x,
+            this.y,
+            this.r,
+        );
+        gradient.addColorStop(0, shadeColor(this.bColor, 0.55));
+        gradient.addColorStop(0.75, this.bColor);
+        gradient.addColorStop(1, shadeColor(this.bColor, -0.25));
+        context.fillStyle = gradient;
         context.beginPath();
         context.arc(this.x, this.y, this.r, 0, Math.PI * 2);
         context.closePath();
-        context.stroke();
         context.fill();
-        context.restore();
+
+        context.strokeStyle = shadeColor(this.bColor, -0.35);
+        context.lineWidth = Math.max(1.5, this.r * 0.06);
+        context.stroke();
+
+        context.beginPath();
+        context.arc(this.x - this.r * 0.38, this.y - this.r * 0.42, this.r * 0.16, 0, Math.PI * 2);
+        context.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        context.fill();
     }
 
     // 圆心到食物的距离不超过半径即视为吃到

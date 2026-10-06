@@ -35,7 +35,7 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 │   ├── core/
 │   │   ├── game.js         # 游戏主循环：自适应渲染、吃食物与重生、体重面板
 │   │   ├── camera.js       # 死区跟随相机，视口钳制在世界内，支持视口尺寸变化
-│   │   ├── player.js       # 玩家小球：移动、边界钳制、绘制、canEat
+│   │   ├── player.js       # 玩家小球：移动、边界钳制、立体渐变绘制、canEat
 │   │   ├── map.js          # 地图：背景图只烤一次，按视口裁剪
 │   │   ├── rectangle.js    # 矩形工具：within / overlaps
 │   │   └── utils.js        # 数学小函数

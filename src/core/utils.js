@@ -20,3 +20,17 @@ export function randomInt(max) {
 export function randomItem(list) {
     return list[randomInt(list.length)];
 }
+
+// 把 #rgb / #rrggbb 颜色调亮（amount > 0）或调暗（amount < 0），返回 rgb() 字符串
+export function shadeColor(hex, amount) {
+    let value = hex.replace('#', '');
+    if (value.length === 3) {
+        value = value.split('').map((c) => c + c).join('');
+    }
+    const num = parseInt(value, 16);
+    const clamp = (channel) => Math.min(255, Math.max(0, Math.round(channel + 255 * amount)));
+    const r = clamp((num >> 16) & 0xff);
+    const g = clamp((num >> 8) & 0xff);
+    const b = clamp(num & 0xff);
+    return `rgb(${r}, ${g}, ${b})`;
+}
