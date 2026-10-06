@@ -61,31 +61,3 @@ body {
     top: 50%;
     margin-top: -15px;
 }
-
-.division {
-    width: 60px;
-    height: 60px;
-    border-radius: 100%;
-
-    background: #fff;
-
-    position: fixed;
-    right: 40px;
-    bottom: 50px;
-    z-index: 1;
-    touch-action: none;
-}
-
-.division span {
-    width: 40px;
-    height: 14px;
-    border-radius: 20px;
-
-    background: #000;
-
-    position: absolute;
-    top: 50%;
-    margin-top: -7px;
-    left: 50%;
-    margin-left: -20px;
-}

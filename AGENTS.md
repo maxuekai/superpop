@@ -28,7 +28,7 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 ## 目录结构
 
 ```
-├── index.html              # 页面：canvas + 体重面板 + 摇杆 + 分裂按钮
+├── index.html              # 页面：canvas + 体重面板 + 摇杆
 ├── src/
 │   ├── main.js             # 入口：启动 Game + Joystick，监听 resize/orientationchange
 │   ├── config.js           # 全部常量（世界/视野缩放/食物/玩家/摇杆/颜色）
