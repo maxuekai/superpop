@@ -19,4 +19,4 @@ export const JOYSTICK = {
     centerOffset: 70,
 };
 export const COLORS = ['#fff', '#ff9797', '#97eaff', '#97ffbe', '#f4ff97', '#ffb797'];
-export const MAP_IMAGE_SRC = './assets/img/bg.jpg';
+export const MAP = { gridStep: 64 };

@@ -49,8 +49,9 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 │   └── index.js            # 联机服务端（npm run server，未接通）
 ├── scripts/
 │   └── check.js            # smoke 检查（npm test）
-└── assets/img/bg.jpg       # 地图背景图
 ```
+
+（旧版引用的背景图 `assets/img/bg.jpg` 已移除：网格背景改为程序生成，见 `src/core/map.js`。）
 
 ## 约定
 
