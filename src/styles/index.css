@@ -41,8 +41,7 @@ body {
     background: rgba(0, 0, 0, 0.5);
 
     position: fixed;
-    bottom: 40px;
-    left: 30px;
+    display: none;
     z-index: 1;
     /* 摇杆拖动不触发页面滚动/缩放 */
     touch-action: none;

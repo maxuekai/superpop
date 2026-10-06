@@ -1,16 +1,21 @@
 import { JOYSTICK } from '../config.js';
 import { distance, edgeOffsetX, edgeOffsetY } from '../core/utils.js';
 
-// 虚拟摇杆（touch 事件）：按住面板任意位置即可拖动，方向写入 player.speedX/speedY
+// 浮动虚拟摇杆（touch 事件）：按住屏幕任意位置，摇杆面板出现在手指处，
+// 拖动方向写入 player.speedX/speedY，松手摇杆消失、球停止。
 // TODO: 只支持触屏，桌面鼠标不可用（见 TODO.md「输入」）
 export class Joystick {
     constructor(controlPanel, player) {
         this.controlPanel = controlPanel;
         this.knob = controlPanel.querySelector('.direction-control');
+        // 监听整个文档：屏幕上任何位置按下都能操控
+        this.layer = controlPanel.ownerDocument;
         this.player = player;
-        this.dragging = false;
-        this.centerX = 0;
-        this.centerY = 0;
+
+        // 正在操控的触摸点 identifier（多指只认第一根手指）
+        this.touchId = null;
+        this.originX = 0;
+        this.originY = 0;
         this.diffX = 0;
         this.diffY = 0;
 
@@ -23,23 +28,38 @@ export class Joystick {
         switch (event.type) {
             case 'touchstart':
                 e.preventDefault();
-                // 不再要求按中摇杆头：面板内任意位置按下都能拖
-                this.dragging = true;
+                // 已有操控中的手指则忽略（避免多指抢控）
+                if (this.touchId !== null) {
+                    return;
+                }
                 {
-                    const rect = this.controlPanel.getBoundingClientRect();
-                    this.centerX = rect.left + rect.width / 2;
-                    this.centerY = rect.top + rect.height / 2;
+                    const touch = event.changedTouches[0];
+                    this.touchId = touch.identifier;
+                    this.originX = touch.clientX;
+                    this.originY = touch.clientY;
+
+                    // 摇杆面板以按下的位置为中心出现（贴边时允许被屏幕裁切）
+                    this.controlPanel.style.display = 'block';
+                    this.controlPanel.style.left = `${this.originX - JOYSTICK.centerOffset}px`;
+                    this.controlPanel.style.top = `${this.originY - JOYSTICK.centerOffset}px`;
+                    this.knob.style.left = '50%';
+                    this.knob.style.top = '50%';
                 }
                 break;
 
             case 'touchmove':
-                if (this.dragging !== true) {
+                if (this.touchId === null) {
                     return;
                 }
+                e.preventDefault();
                 {
-                    // 手指相对面板中心的位置
-                    let tempX = event.touches[0].clientX - this.centerX;
-                    let tempY = event.touches[0].clientY - this.centerY;
+                    const touch = this.findTouch(event.touches, this.touchId);
+                    if (!touch) {
+                        return;
+                    }
+                    // 手指相对按下原点的位置
+                    let tempX = touch.clientX - this.originX;
+                    let tempY = touch.clientY - this.originY;
 
                     // 超出圆形范围时固定在边缘
                     if (distance(tempX, tempY, 0, 0) >= JOYSTICK.radius) {
@@ -59,12 +79,18 @@ export class Joystick {
                 break;
 
             case 'touchend':
-                if (this.dragging !== true) {
+            case 'touchcancel':
+                if (this.touchId === null) {
                     return;
                 }
+                // 只有操控中的那根手指抬起才停止
+                if (!this.findTouch(event.changedTouches, this.touchId)) {
+                    return;
+                }
+                this.touchId = null;
+                this.controlPanel.style.display = 'none';
                 this.knob.style.left = '50%';
                 this.knob.style.top = '50%';
-                this.dragging = false;
                 // 松手即停
                 this.player.speedX = 0;
                 this.player.speedY = 0;
@@ -72,15 +98,27 @@ export class Joystick {
         }
     }
 
+    findTouch(touchList, identifier) {
+        for (const touch of touchList) {
+            if (touch.identifier === identifier) {
+                return touch;
+            }
+        }
+        return null;
+    }
+
     enable() {
-        this.controlPanel.addEventListener('touchstart', this.handleEvent);
-        this.controlPanel.addEventListener('touchmove', this.handleEvent);
-        this.controlPanel.addEventListener('touchend', this.handleEvent);
+        // passive: false 才能 preventDefault 掉页面滚动/缩放
+        this.layer.addEventListener('touchstart', this.handleEvent, { passive: false });
+        this.layer.addEventListener('touchmove', this.handleEvent, { passive: false });
+        this.layer.addEventListener('touchend', this.handleEvent);
+        this.layer.addEventListener('touchcancel', this.handleEvent);
     }
 
     disable() {
-        this.controlPanel.removeEventListener('touchstart', this.handleEvent);
-        this.controlPanel.removeEventListener('touchmove', this.handleEvent);
-        this.controlPanel.removeEventListener('touchend', this.handleEvent);
+        this.layer.removeEventListener('touchstart', this.handleEvent);
+        this.layer.removeEventListener('touchmove', this.handleEvent);
+        this.layer.removeEventListener('touchend', this.handleEvent);
+        this.layer.removeEventListener('touchcancel', this.handleEvent);
     }
 }
