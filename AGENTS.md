@@ -17,6 +17,13 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 
 客户端是**原生 ES modules**，没有构建步骤。`server/dev-server.js` 只是开发预览用；联机服务端在 `server/index.js`。
 
+## Node.js 环境
+
+- 用 [fnm](https://github.com/Schniz/fnm) 管理 Node 版本（本机未开开发者模式、无管理员权限，nvm-windows 的符号链接不可用，故选 fnm）。
+- 版本约定见 `.nvmrc`（当前 `24`）；装了 fnm 的 shell 里 `cd` 进仓库会自动切换，或手动 `fnm install` / `fnm use`。
+- 国内网络下已配置 `FNM_NODE_DIST_MIRROR=https://registry.npmmirror.com/-/binary/node`（用户级环境变量），`fnm install --lts` 也走镜像。
+- Windows PowerShell 5.1 用户注意：profile 里必须先 `[Console]::OutputEncoding = [Text.Encoding]::UTF8` 再 eval `fnm env`，否则中文路径下解码错误（本仓库 profile 已配好，勿删）。
+
 ## 目录结构
 
 ```
