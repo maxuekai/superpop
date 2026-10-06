@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=0">
     <title>球球大作战</title>
-    <link rel="stylesheet" type="text/css" href="src/reset.css">
-    <link rel="stylesheet" type="text/css" href="src/index.css">
+    <link rel="stylesheet" type="text/css" href="src/styles/reset.css">
+    <link rel="stylesheet" type="text/css" href="src/styles/index.css">
 </head>
 
 <body>
@@ -18,11 +18,11 @@
         <div class="division">
             <span></span>
         </div>
-        <canvas id="ball" width="667" height="375" />
+        <canvas id="ball" width="667" height="375"></canvas>
     </div>
 
-    <!-- <script type="text/javascript" src="/socket.io/socket.io.js"></script> -->
-    <script src="src/index.js"></script>
+    <!-- 联机接入后由 src/net/client.js 负责加载 socket.io -->
+    <script type="module" src="src/main.js"></script>
 </body>
 
 </html>
