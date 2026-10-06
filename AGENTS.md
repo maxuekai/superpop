@@ -12,7 +12,7 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 
 | 命令 | 作用 | 依赖 |
 |---|---|---|
-| `npm run dev` | 静态服务器，http://localhost:3000；启动时打印局域网 URL 和手机扫码用的二维码 | 无（二维码需可选的 devDependency `qrcode`，没装则只打印 URL） |
+| `npm run dev` | 静态服务器，http://localhost:3000；启动时打印局域网 URL、生成 `qr.png` 二维码图片并自动打开（IP 未变化时不重复弹窗），终端另有一份字符二维码兜底 | 无（二维码需可选的 devDependency `qrcode`，没装则只打印 URL） |
 | `npm run server` | 多人联机服务端（express + socket.io） | 需先 `npm install` |
 | `npm test` | smoke 检查：对所有 js 跑 `node --check` | 无 |
 

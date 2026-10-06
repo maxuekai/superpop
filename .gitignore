@@ -5,3 +5,7 @@
 node_modules
 
 npm-debug.log
+
+# 本地局域网二维码（IP 会变，不入库）
+qr.png
+.qr-last-url
