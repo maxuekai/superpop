@@ -13,10 +13,10 @@ export const PLAYER = {
     growthPerFood: 0.5,
 };
 export const JOYSTICK = {
-    // 摇杆面板半径（超出该距离摇杆头停在边缘）
-    radius: 65,
-    // 摇杆头相对面板左上角的居中偏移（面板 100px、摇杆头 30px）
-    centerOffset: 50,
+    // 摇杆面板半径（拖动超出该距离摇杆头停在边缘）
+    radius: 70,
+    // 摇杆头相对面板左上角的居中偏移 = 面板直径/2（面板 140px）
+    centerOffset: 70,
 };
 export const COLORS = ['#fff', '#ff9797', '#97eaff', '#97ffbe', '#f4ff97', '#ffb797'];
 export const MAP_IMAGE_SRC = './assets/img/bg.jpg';
