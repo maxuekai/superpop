@@ -64,12 +64,22 @@ test('outweighs 受 EAT.ratio 阈值约束', () => {
     assert.equal(mid.outweighs(big), false);
 });
 
-test('canEatBall：尺寸够还要对方圆心进入体内', () => {
+test('canEatBall：尺寸够 + 两个圆有重叠就吃（碰到边缘即死）', () => {
     const big = ball(100, 100, 20);
-    const small = ball(100 + 19, 100, 10); // 圆心在半径内
-    const far = ball(100 + 60, 100, 10); // 圆心在体外
-    assert.equal(big.canEatBall(small), true);
-    assert.equal(big.canEatBall(far), false);
+    const touch = ball(100 + 30, 100, 10); // 中心距 30 = 半径和，刚好接触
+    const overlap = ball(100 + 19, 100, 10); // 明显重叠
+    const justOutside = ball(100 + 30.01, 100, 10);
+    assert.equal(big.canEatBall(overlap), true);
+    assert.equal(big.canEatBall(touch), true, '碰到边缘就该吃掉，不要求圆心进入体内');
+    assert.equal(big.canEatBall(justOutside), false);
+});
+
+test('canEatBall：擦边而过不会被吃（两圆不重叠就不吃）', () => {
+    const big = ball(400, 384, 22, '大球');
+    const small = ball(400, 384 + 31.9, 10, '小球'); // 最近距 31.9 < 半径和 32
+    assert.equal(big.canEatBall(small), true, '31.9 < 32，已经碰到了');
+    const graze = ball(400, 384 + 32.1, 10, '擦过');
+    assert.equal(big.canEatBall(graze), false, '32.1 > 32，没碰到');
 });
 
 test('absorb：质量按 r² 累加后开方', () => {
@@ -1002,63 +1012,30 @@ test('软碰撞：吃不掉彼此的球被挤开，不该穿模叠在一起', ()
     assert.ok(Math.abs((a.x - 500) + (b.x - 510)) < 1e-9);
 });
 
-test('软碰撞：尺寸够吃对方的一对不会被弹开（回归：曾把猎物锁死在半径和上）', () => {
-    // 吃人的条件是「对方圆心进入自己体内」（中心距 ≤ 吃者半径），而弹开会把中心距
-    // 精确复位到「两半径之和」——半径和恒大于吃者半径，猎物就永远够不到阈值。
-    // 真机反馈原话："撞比我大的球，我都没死，互相卡住进不去"。
+test('软碰撞与互吃用同一个阈值（这个不变量保证"撞大球会被吃"而不是卡住）', () => {
+    // 吃人阈值与弹开阈值都是 r1+r2，于是"尺寸够吃、又没有保护"的重叠对
+    // 一定已经在 resolveEatings 里被吃掉，不可能走到 resolveOverlaps。
+    // 曾经两者不一致（吃=圆心进体内 / 弹=半径和），猎物被锁死在半径和上进不去。
     const big = ball(500, 500, 30, '大球');
-    const small = ball(535, 500, 10, '小球'); // 中心距 35 < 半径和 40，明显重叠
-    assert.equal(big.outweighs(small), true, '前置条件：大球尺寸上吃得掉小球');
-
-    const pushed = resolveOverlaps([big, small]);
-    assert.equal(pushed.length, 0, '能吃的一对不该被弹开');
-    assert.equal(distance2(big.x - small.x, big.y - small.y), 35, '位置不能被改动');
+    const small = ball(535, 500, 10, '小球'); // 中心距 35 < 半径和 40
+    const list = [big, small];
+    assert.equal(distance2(big.x - small.x, big.y - small.y) <= big.r + small.r, true, '前置：已经重叠');
+    resolveEatings(list, 0);
+    assert.equal(small.alive, false, '重叠且尺寸够 → 这一步就该被吃掉');
+    resolveOverlaps(list, 0);
+    assert.equal(list.filter((b) => b.alive).length, 1, '被吃掉的球不再参与弹开');
 });
 
-test('整局裁定：猎物撞向比自己大的球会被吃掉（软碰撞在场时也成立）', () => {
-    // 走 Game.updateWorld 的真实顺序：移动 → 吃 → 弹开
-    const big = ball(300, 300, 30, '大球');
-    const prey = ball(600, 300, 10, '小球');
-    const list = [big, prey];
-    let died = false;
-    let minGap = Infinity;
-    for (let step = 0; step < 60 * 30 && !died; step += 1) {
-        prey.speedX = -70; // 满舵朝大球冲
-        prey.speedY = 0;
-        for (const b of list) {
-            if (b.alive) {
-                b.update(STEP, WORLD);
-            }
-        }
-        resolveEatings(list, step * STEP);
-        resolveOverlaps(list);
-        died = !prey.alive;
-        minGap = Math.min(minGap, distance2(big.x - prey.x, big.y - prey.y));
-    }
-    assert.equal(died, true, `满舵冲 30 秒必须被吃掉，不能被软碰撞卡死（最近只到 ${minGap.toFixed(1)}）`);
-});
-
-test('软碰撞：被出生保护的一对仍然弹开（不能让它嵌在大球里）', () => {
-    // 看的是"猎物有没有被保护"，不是吃者：吃者自己有保护不影响它吃人
-    const eater = ball(500, 500, 30, '大球');
-    const prey1 = ball(535, 500, 10, '小球');
-    eater.grantShield(2, 0);
-    assert.equal(resolveOverlaps([eater, prey1], 1).length, 0, '吃者有保护不该影响放行');
-
-    // 猎物在保护期 → 吃不掉，但仍然要弹开让它能滑走
+test('软碰撞：被出生保护的猎物仍然弹开（不能让它嵌在大球里）', () => {
+    // 保护期内 resolveEatings 不吃，但重叠还在 → 照常弹开，让它能滑走；
+    // 否则它会整个嵌在大球里，保护一到期立刻暴毙。
     const big = ball(500, 500, 30, '大球');
     const small = ball(535, 500, 10, '小球');
     small.grantShield(2, 0);
     const pushed = resolveOverlaps([big, small], 1);
     assert.equal(pushed.length, 2, '保护期内那一对仍然要弹开');
     assert.equal(distance2(big.x - small.x, big.y - small.y), 40, '弹回到半径和');
-
-    // 保护期结束后就放行，让它能被吃掉
-    const big3 = ball(500, 500, 30, '大球3');
-    const small3 = ball(535, 500, 10, '小球3');
-    small3.grantShield(2, 0);
-    const after = resolveOverlaps([big3, small3], 5);
-    assert.equal(after.length, 0, '保护期过了就放行重叠，下一帧被吃掉');
+    assert.equal(small.alive, true, '弹开不会误杀');
 });
 
 test('软碰撞：同一 owner 的分身不被推开（它们要合并而不是互推）', () => {

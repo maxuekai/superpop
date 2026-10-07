@@ -131,12 +131,18 @@ export class Ball {
         return this.r > other.r * EAT.ratio;
     }
 
-    // 能否吃掉对方：尺寸够 + 对方圆心已进入自己体内；**自己的分身不吃**
+    // 能否吃掉对方：尺寸够 + 两个圆有重叠；**自己的分身不吃**。
+    // 吃人条件用「两圆重叠」（中心距 ≤ r1+r2）而不是「对方圆心进入自己体内」：
+    // 后者要求猎物先深入吃者半径内，小球才能贴着边缘擦过去而不死——真机反馈
+    // "不是应该一碰到边缘就被吃掉吗"。类型游戏的标准口径也是重叠即吃。
     canEatBall(other) {
         if (other.ownerId === this.ownerId) {
             return false;
         }
-        return this.outweighs(other) && distance(this.x, this.y, other.x, other.y) <= this.r;
+        if (!this.outweighs(other)) {
+            return false;
+        }
+        return distance(this.x, this.y, other.x, other.y) <= this.r + other.r;
     }
 
     // 吸收对方质量：质量按 r² 累加后再开方回半径。
