@@ -35,6 +35,8 @@ export class Hud {
         this.splitLabel = root.querySelector('.division-label');
         this.lastSplitLabel = '';
 
+        this.menuBtn = root.querySelector('.menu-btn');
+
         this.refreshTimer = 0;
         this.lastWeight = -1;
         this.lastBoard = '';
@@ -95,11 +97,23 @@ export class Hud {
         }
     }
 
-    // 分裂按钮：手机端唯一入口（桌面还可以按空格）
+    // 分裂按钮：手机端主要入口（桌面还可以按空格）
+    //
+    // 用 pointerdown 而不是 click：click 是浏览器从 touch 合成的，而摇杆一有活跃手指
+    // （一边拖动一边想按分裂），多指手势下这个合成 click 经常不触发——真机反馈
+    // "分裂还是不能一边移动一边分裂"。pointerdown 在手指按下的瞬间就派发，不经过
+    // 合成，也不受摇杆在 touchmove 上 preventDefault 的影响。
+    // click 保留作为兜底；两个入口都走 requestSplit，它自带 8s 冷却，
+    // 重复触发会被自己挡掉，不会分裂两次。
     onSplit(handler) {
-        if (this.splitBtn) {
-            this.splitBtn.addEventListener('click', handler);
+        if (!this.splitBtn) {
+            return;
         }
+        this.splitBtn.addEventListener('pointerdown', (e) => {
+            // 不要 preventDefault：会连带屏蔽 click，也影响按钮的 :active 反馈
+            handler(e);
+        });
+        this.splitBtn.addEventListener('click', handler);
     }
 
     // 分裂按钮的可用态与冷却文案。
@@ -145,6 +159,10 @@ export class Hud {
         this.updateWeight(game.playerMass());
         this.renderLeaderboard(game.leaderboard());
         this.updateSplit(game.splitState());
+        // 菜单按钮只在局内出现：弹层期间它露在边缘会很难看
+        if (this.menuBtn) {
+            this.menuBtn.classList.toggle('hidden', game.state !== 'playing');
+        }
     }
 
     // 体重面板 = 玩家整组质量（分身的质量之和）
@@ -204,6 +222,32 @@ export class Hud {
         }
         if (this.settlementOverlay) {
             this.settlementOverlay.classList.remove('hidden');
+        }
+    }
+
+    // 菜单按钮：结束本局回到开局界面（球长得太大、想收手时用）
+    // 同样走 pointerdown，理由见 onSplit。
+    onMenu(handler) {
+        if (!this.menuBtn) {
+            return;
+        }
+        this.menuBtn.addEventListener('pointerdown', (e) => {
+            this.releaseFocus();
+            handler(e);
+        });
+        this.menuBtn.addEventListener('click', (e) => {
+            this.releaseFocus();
+            handler(e);
+        });
+    }
+
+    // 重新显示开局界面（从菜单回来时用）
+    showStart() {
+        if (this.settlementOverlay) {
+            this.settlementOverlay.classList.add('hidden');
+        }
+        if (this.startOverlay) {
+            this.startOverlay.classList.remove('hidden');
         }
     }
 

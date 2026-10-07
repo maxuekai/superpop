@@ -302,6 +302,16 @@ export class Game {
         this.hud.hideSettlement();
     }
 
+    // 左下角「菜单」：结束本局，回到开局界面。
+    // state 置回 'menu' 就会停掉 updateWorld（世界冻结），跟开局界面一致；
+    // 分身/质量/冷却全部由 resetPlayer 清干净，不会带着上一局的巨大体型继续。
+    quitToMenu() {
+        this.state = 'menu';
+        this.resetPlayer();
+        this.camera.snapTo(this.largestCell());
+        this.hud.showStart();
+    }
+
     // 整组玩家细胞都被吃光才算死。finalMass 要传「死亡瞬间」的质量：
     // 走到这里时细胞已经被移出数组，playerMass() 已经是 0，结算会显示成 0kg。
     onPlayerEaten(finalMass) {

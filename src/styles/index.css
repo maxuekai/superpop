@@ -149,6 +149,31 @@ body {
     z-index: 2;
 }
 
+/* 菜单按钮：放左下角（与右下角的分裂按钮分开，两个拇指各管一个） */
+.menu-btn {
+    position: fixed;
+    left: 20px;
+    bottom: 28px;
+    z-index: 2;
+
+    padding: 10px 20px;
+    border: none;
+    border-radius: 999px;
+
+    font-family: inherit;
+    font-size: 14px;
+    color: #e6f5f0;
+    background-color: rgba(0, 0, 0, 0.42);
+}
+
+.menu-btn:active {
+    background-color: rgba(0, 0, 0, 0.62);
+}
+
+.menu-btn.hidden {
+    display: none;
+}
+
 .division.ready {
     animation: split-ready 1.4s ease-in-out infinite;
 }
