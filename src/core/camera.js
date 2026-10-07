@@ -25,10 +25,16 @@ export class Camera {
         this.worldRect = new Rectangle(0, 0, worldWidth, worldHeight);
     }
 
+    // 跟随目标。不传死区时保留现有值——每帧调用 follow(target) 如果把死区写成
+    // undefined，后面 update() 里的比较会全变成 NaN，镜头就永远不动了。
     follow(gameObject, xDeadZone, yDeadZone) {
         this.followed = gameObject;
-        this.xDeadZone = xDeadZone;
-        this.yDeadZone = yDeadZone;
+        if (typeof xDeadZone === 'number') {
+            this.xDeadZone = xDeadZone;
+        }
+        if (typeof yDeadZone === 'number') {
+            this.yDeadZone = yDeadZone;
+        }
     }
 
     // 窗口尺寸变化时更新视口大小（单位：世界坐标），并同步死区

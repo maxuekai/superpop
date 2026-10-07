@@ -783,6 +783,24 @@ test('AI 昵称：名字全被占满时才退回随机（不崩、不返回 unde
     assert.ok(pool.includes(name), `应从原池子里退化选取，实际 ${name}`);
 });
 
+test('相机：每帧 follow(target) 不带死区也不会把镜头锁死（回归）', () => {
+    // Game.update() 的真实顺序：setViewSize() 先设好死区 → follow(target) 不传死区 → update()
+    // 早期 follow() 会用 undefined 覆盖死区，导致比较全变 NaN、镜头永不动
+    const camera = new Camera(0, 0, 0, 0, 2000, 2000, 0.35);
+    const target = ball(300, 300, 10);
+    camera.follow(target);
+    camera.setViewSize(400, 400);
+    camera.follow(target);
+    assert.equal(typeof camera.xDeadZone, 'number', '死区不能被写成 undefined');
+    assert.ok(camera.xDeadZone > 0);
+
+    camera.follow(target); // 再跟几帧
+    camera.follow(target);
+    target.x = 700; // 走出死区
+    camera.update();
+    assert.ok(camera.xView > 0, `球走出死区后镜头必须移动，实际 xView=${camera.xView}`);
+});
+
 test('相机死区：球偏离屏幕中心一小段时镜头就开始跟', () => {
     const camera = new Camera(0, 0, 400, 400, 2000, 2000, 0.35);
     const target = ball(0, 0, 10);
