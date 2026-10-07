@@ -34,6 +34,11 @@ window.addEventListener('load', () => {
     // 窗口尺寸 / 屏幕方向变化时重算画布与视口
     window.addEventListener('resize', game.resize);
     window.addEventListener('orientationchange', game.resize);
+    // 手机上地址栏收放会改变可视视口高度，但不一定触发 window.resize；
+    // 漏了这次重算，画布尺寸就和显示尺寸对不上（球变形 + 镜头错位）
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', game.resize);
+    }
 
     game.start();
 });

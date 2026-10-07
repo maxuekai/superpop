@@ -2,9 +2,10 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, PLAYER, SPLIT } from '../src/config.js';
+import { AI, EAT, FOOD, JOYSTICK, NAMES, PLAYER, SPLIT } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
+import { Camera } from '../src/core/camera.js';
 import { Player } from '../src/core/player.js';
 import {
     canSplit,
@@ -14,6 +15,7 @@ import {
     isSpawnClear,
     leaderboardEntries,
     mergeCells,
+    pickFreeName,
     rankOfGroup,
     resolveEatings,
     resolveFoodEating,
@@ -763,6 +765,41 @@ test('摇杆：界面元素上的触摸不接管、不 preventDefault（否则�
 function distance2(x, y) {
     return Math.sqrt(x * x + y * y);
 }
+
+test('AI 昵称不重名：同屏 AI 不会有两个「芋圆」', () => {
+    // 模拟逐个出生：每次都避开当前存活 AI 已占用的名字
+    const assigned = [];
+    for (let i = 0; i < NAMES.length; i += 1) {
+        const name = pickFreeName(assigned, NAMES);
+        assert.equal(assigned.includes(name), false, `第 ${i + 1} 个又抽到了已占用的 ${name}`);
+        assigned.push(name);
+    }
+    assert.equal(new Set(assigned).size, NAMES.length, '抽满一轮后每个名字各用一次');
+});
+
+test('AI 昵称：名字全被占满时才退回随机（不崩、不返回 undefined）', () => {
+    const pool = ['a', 'b'];
+    const name = pickFreeName(['a', 'b'], pool);
+    assert.ok(pool.includes(name), `应从原池子里退化选取，实际 ${name}`);
+});
+
+test('相机死区：球偏离屏幕中心一小段时镜头就开始跟', () => {
+    const camera = new Camera(0, 0, 400, 400, 2000, 2000, 0.35);
+    const target = ball(0, 0, 10);
+    camera.follow(target);
+    camera.setViewSize(400, 400);
+    // 死区 0.35 → 球在 x=200（正中）附近移动时镜头不动
+    target.x = 200;
+    camera.update();
+    assert.equal(camera.xView, 0, '正中附近不该动');
+    // 超出死区后镜头跟上，球保持在距离中心固定的偏移上
+    target.x = 400;
+    camera.update();
+    assert.ok(camera.xView > 0, '球超出死区后镜头必须移动');
+    const offsetFromCenter = target.x - (camera.xView + camera.wView / 2);
+    assert.ok(offsetFromCenter > 0 && offsetFromCenter < 400 * 0.2,
+        `球应留在屏幕中心附近，实际偏移 ${offsetFromCenter.toFixed(1)}`);
+});
 
 // ---------- 出生保护 ----------
 

@@ -12,6 +12,7 @@ import {
     isSpawnClear,
     leaderboardEntries,
     mergeCells,
+    pickFreeName,
     rankOfGroup,
     resolveEatings,
     resolveFoodEating,
@@ -64,7 +65,7 @@ export class Game {
         // （分身不是一个球，共享同一个方向；不共用对象的话输入只会作用在其中一个上）
         this.input = { speedX: 0, speedY: 0 };
 
-        this.camera = new Camera(0, 0, 0, 0, this.world.width, this.world.height);
+        this.camera = new Camera(0, 0, 0, 0, this.world.width, this.world.height, VIEW.cameraDeadZone);
         this.camera.follow(this.largestCell());
 
         this.resize = this.resize.bind(this);
@@ -180,6 +181,12 @@ export class Game {
         };
     }
 
+    // 抽一个当前没人用的昵称（同屏出现两个同名会让玩家分不清，规则见 rules.pickFreeName）
+    pickAiName() {
+        const used = this.ai.filter((ai) => ai.alive).map((ai) => ai.name);
+        return pickFreeName(used, NAMES);
+    }
+
     // AI 出生半径：跟着玩家体型取样（用整组里最大的分身，否则分裂后会被低估）
     aiSpawnRadius(ratio) {
         const min = PLAYER.radius * AI.spawnRadiusMin;
@@ -191,7 +198,7 @@ export class Game {
         for (let i = 0; i < count; i += 1) {
             const r = this.aiSpawnRadius(AI.spawnRadiusRatio);
             const pos = this.safeSpawnPosition(r);
-            const ai = new AiPlayer(pos.x, pos.y, r, randomItem(COLORS), randomItem(NAMES));
+            const ai = new AiPlayer(pos.x, pos.y, r, randomItem(COLORS), this.pickAiName());
             ai.foodGain = AI.foodGain;
             this.ai.push(ai);
             this.balls.push(ai);
@@ -228,7 +235,7 @@ export class Game {
         const pos = this.safeSpawnPosition(r);
         ai.reset(pos.x, pos.y, r, randomItem(COLORS));
         ai.foodGain = AI.foodGain;
-        ai.name = randomItem(NAMES);
+        ai.name = this.pickAiName();
         ai.targetBall = null;
         ai.targetFood = null;
         ai.escapeFood = null;
@@ -393,13 +400,21 @@ export class Game {
     // 画布铺满窗口，并按 devicePixelRatio 渲染保证手机清晰度
     resize() {
         const dpr = window.devicePixelRatio || 1;
-        this.cssWidth = window.innerWidth;
-        this.cssHeight = window.innerHeight;
-        this.canvas.width = Math.round(this.cssWidth * dpr);
-        this.canvas.height = Math.round(this.cssHeight * dpr);
+        // 必须量画布自己的盒子，而不是 window.innerWidth/innerHeight：
+        // 手机上 CSS 的 100vh 是「地址栏收起时的最大高度」，而 window.innerHeight 是
+        // 「地址栏展开时的当前高度」，两者不一致 → 像素尺寸与显示尺寸不等比 → 球被拉成椭圆，
+        // 同时相机视口也按错尺寸算，画面和镜头以为的位置对不上（表现为镜头不跟、球跑丢）。
+        const rect = this.canvas.getBoundingClientRect();
+        const cssWidth = Math.round(rect.width) || window.innerWidth;
+        const cssHeight = Math.round(rect.height) || window.innerHeight;
+
+        this.cssWidth = cssWidth;
+        this.cssHeight = cssHeight;
+        this.canvas.width = Math.round(cssWidth * dpr);
+        this.canvas.height = Math.round(cssHeight * dpr);
 
         // 保证视口不大于整个世界（否则相机会被钳制出负坐标）
-        this.fitScale = Math.max(this.cssWidth / this.world.width, this.cssHeight / this.world.height);
+        this.fitScale = Math.max(cssWidth / this.world.width, cssHeight / this.world.height);
         this.updateViewScale();
     }
 

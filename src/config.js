@@ -9,7 +9,9 @@ export const TICK = { fps: 60, maxSteps: 5 };
 // 实际渲染时会取「按此换算的缩放」和「窗口能装下整张地图的缩放」中较大的一个，
 // 保证视口永远不超过世界大小（否则相机钳制会出问题）。
 // zoomExponent：视野随体型的缩放指数——半径翻倍，视距变为 2^zoomExponent 倍。
-export const VIEW = { longEdgeWorld: 900, zoomExponent: 0.35 };
+// cameraDeadZone：相机死区占视口的比例（0.35 = 球可以偏离屏幕中心约 15% 而镜头不动）。
+// 别调太大：手机上视口很窄，死区接近 0.5（早期值）时球能飘到四分之一个屏幕外，容易找不到。
+export const VIEW = { longEdgeWorld: 900, zoomExponent: 0.35, cameraDeadZone: 0.35 };
 
 // 食物：count 颗、半径 radius，成簇生成（clusterSize 颗/簇，簇半径 clusterRadius）。
 // 成簇是因为散点太难点——单颗食物在手机上只有几个像素，散开时等于「擦身而过」。
@@ -158,7 +160,12 @@ export const NICKNAME = {
     maxLength: 10,
 };
 
-export const NAMES = ['小圆子', '肉松', '汤圆', '布丁', '麻薯', '芋圆', '奶盖', '泡芙', '雪媚娘', '双皮奶', '蛋挞', '糯米糍'];
+// 昵称池要比同屏 AI 上限（AI.count）宽裕一些，留出余量避免频繁重名
+export const NAMES = [
+    '小圆子', '肉松', '汤圆', '布丁', '麻薯', '芋圆', '奶盖', '泡芙',
+    '雪媚娘', '双皮奶', '蛋挞', '糯米糍', '麻花', '糖葫芦', '椰冻',
+    '奶糖', '布丁包', '铜锣烧', '寿司', '章鱼小丸子',
+];
 
 export const COLORS = ['#fff', '#ff9797', '#97eaff', '#97ffbe', '#f4ff97', '#ffb797'];
 

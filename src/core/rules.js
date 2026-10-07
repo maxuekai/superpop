@@ -209,6 +209,15 @@ export function mergeCells(cells, now) {
 }
 
 // ---------- 出生点 ----------
+// 取一个当前没人用的昵称：AI 数量可能接近名字数量，纯随机抽必然出现两个「芋圆」，
+// 玩家分不清谁是谁。名字全被占满时才退回随机。
+export function pickFreeName(used, names) {
+    const taken = new Set(used);
+    const free = names.filter((name) => !taken.has(name));
+    const pool = free.length > 0 ? free : names;
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // 出生点是否安全：远离所有存活的球，比目标大的留更宽的余量。
 export function isSpawnClear(pos, radius, balls, extraGap = 24) {
     for (const ball of balls) {

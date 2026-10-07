@@ -3,10 +3,13 @@ import { Rectangle } from './rectangle.js';
 // 跟随相机的死区逻辑：被跟随物体在死区内移动时相机不动，
 // 超出死区则平移视口，并把视口钳制在世界范围内
 export class Camera {
-    constructor(xView, yView, canvasWidth, canvasHeight, worldWidth, worldHeight) {
+    // 死区占视口的比例（VIEW.cameraDeadZone）。0.5 表示球要飘到屏幕中心之外镜头才动，
+    // 手机上这个值太大会「球不见了」，所以默认 0.35。
+    constructor(xView, yView, canvasWidth, canvasHeight, worldWidth, worldHeight, deadZoneRatio = 0.35) {
         this.xView = xView || 0;
         this.yView = yView || 0;
 
+        this.deadZoneRatio = deadZoneRatio;
         this.xDeadZone = 0;
         this.yDeadZone = 0;
 
@@ -34,8 +37,8 @@ export class Camera {
         this.hView = height;
         this.viewportRect.set(this.xView, this.yView, width, height);
         if (this.followed !== null) {
-            this.xDeadZone = width / 2;
-            this.yDeadZone = height / 2;
+            this.xDeadZone = width * this.deadZoneRatio;
+            this.yDeadZone = height * this.deadZoneRatio;
         }
     }
 
