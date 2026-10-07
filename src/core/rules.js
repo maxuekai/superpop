@@ -73,13 +73,13 @@ export function resolveFoodEating(foodList, balls, makeFood) {
     return { foodList: kept, eaten };
 }
 
-// 名次：按"整组质量"比。cells 是玩家那一组（可能已全灭，此时也算），others 是别人的球。
-// 例：结算界面要显示死亡那一刻的名次，所以 cells 全灭时也要能算。
-export function rankOfGroup(cells, others) {
-    const total = groupMass(cells);
+// 名次：按传入的整组质量比（死亡时要用「死亡瞬间」的质量，不能用清空后的 0）。
+// 注意不要写 cells[0].xxx：玩家全灭后 cells 是空数组，那会抛 TypeError，
+// 而异常从 Game.loop 抛出后 rAF 链就断了，表现为整页卡死。
+export function rankOfGroup(mass, others) {
     let rank = 1;
     for (const other of others) {
-        if (other.alive && other.ownerId !== cells[0].ownerId && other.mass > total) {
+        if (other.alive && other.mass > mass) {
             rank += 1;
         }
     }
@@ -87,12 +87,14 @@ export function rankOfGroup(cells, others) {
 }
 
 // 排行榜：玩家按整组质量算一条，AI 每个球一条，降序取前 N。
+// 玩家已全灭（cells 为空）时不出现在榜上——名次由结算界面显示。
 export function leaderboardEntries(cells, others, size = HUD.leaderboardSize) {
-    const total = groupMass(cells);
     const rows = others
-        .filter((ball) => ball.alive && ball.ownerId !== cells[0].ownerId)
+        .filter((ball) => ball.alive)
         .map((ball) => ({ name: ball.name, weight: ball.mass, isPlayer: false }));
-    rows.push({ name: cells[0].name, weight: total, isPlayer: true });
+    if (cells.length > 0) {
+        rows.push({ name: cells[0].name, weight: groupMass(cells), isPlayer: true });
+    }
     return rows
         .sort((a, b) => b.weight - a.weight)
         .slice(0, size)

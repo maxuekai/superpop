@@ -290,14 +290,15 @@ export class Game {
         this.hud.hideSettlement();
     }
 
-    // 整组玩家细胞都被吃光才算死
-    onPlayerEaten() {
+    // 整组玩家细胞都被吃光才算死。finalMass 要传「死亡瞬间」的质量：
+    // 走到这里时细胞已经被移出数组，playerMass() 已经是 0，结算会显示成 0kg。
+    onPlayerEaten(finalMass) {
         this.input.speedX = 0;
         this.input.speedY = 0;
         this.state = 'dead';
         this.hud.showSettlement({
-            weight: Math.round(this.playerMass()),
-            rank: rankOfGroup(this.playerCells, this.ai),
+            weight: Math.round(finalMass),
+            rank: rankOfGroup(finalMass, this.ai),
             time: this.playTime,
             food: this.foodEaten,
             kills: this.kills,
@@ -377,6 +378,9 @@ export class Game {
 
     // 互吃：大的吃小的（判定在 rules.resolveEatings），这里只安排死亡结算与重生
     eatBalls() {
+        // 结算要用的质量必须在裁定「之前」取：resolveEatings 会把被吃的细胞
+        // 标成 alive=false，之后 groupMass 就不会把它算进去（结算会显示 0kg）
+        const massBefore = this.playerMass();
         const { victims, eaten } = resolveEatings(this.balls, this.time);
         for (const cell of this.playerCells) {
             this.kills += eaten.get(cell) || 0;
@@ -391,7 +395,7 @@ export class Game {
         }
         this.rebuildBalls();
         if (this.state === 'playing' && this.playerCells.length === 0) {
-            this.onPlayerEaten();
+            this.onPlayerEaten(massBefore);
         }
     }
 

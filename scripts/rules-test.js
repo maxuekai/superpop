@@ -494,16 +494,17 @@ test('吃食物：死亡球吃不到（不会被隔空吃掉）', () => {
 });
 
 test('名次：按整组质量比（分身质量之和算一条）', () => {
-    const cells = [ball(0, 0, 10, 'me'), ball(0, 0, 20, 'me2')];
-    const heavier1 = ball(0, 0, 30, 'h1');
-    const heavier2 = ball(0, 0, 40, 'h2');
-    const lighter = ball(0, 0, 8, 'l');
+    // 玩家组质量 = 100+400 = 500
+    const heavier1 = ball(0, 0, 30, 'h1'); // 900
+    const heavier2 = ball(0, 0, 40, 'h2'); // 1600
+    const lighter = ball(0, 0, 8, 'l'); // 64
     const dead = ball(0, 0, 100, 'dead');
     dead.alive = false;
-    // 玩家组质量 = 100+400 = 500；h1(900) 与 h2(1600) 都比它重 → 第 3 名
-    assert.equal(rankOfGroup(cells, [heavier1, heavier2, lighter, dead]), 3);
-    // 换成很小的组（质量 25）：两个重球 + lighter(64) 都压过它 → 第 4 名
-    assert.equal(rankOfGroup([ball(0, 0, 5, 'me')], [heavier1, heavier2, lighter]), 4);
+    const cells = [ball(0, 0, 10, 'me'), ball(0, 0, 20, 'me2')];
+    // h1(900) 与 h2(1600) 都比 500 重，dead 已死不计 → 第 3 名
+    assert.equal(rankOfGroup(groupMass(cells), [heavier1, heavier2, lighter, dead]), 3);
+    // 换成很小的组（质量 25）：三个球都压过它 → 第 4 名
+    assert.equal(rankOfGroup(25, [heavier1, heavier2, lighter]), 4);
 });
 
 test('排行榜：玩家只占一条（按整组质量），AI 各占一条', () => {
@@ -817,6 +818,32 @@ test('相机死区：球偏离屏幕中心一小段时镜头就开始跟', () =>
     const offsetFromCenter = target.x - (camera.xView + camera.wView / 2);
     assert.ok(offsetFromCenter > 0 && offsetFromCenter < 400 * 0.2,
         `球应留在屏幕中心附近，实际偏移 ${offsetFromCenter.toFixed(1)}`);
+});
+
+test('玩家全灭后：排行榜与名次都不许崩（回归：曾导致整页卡死）', () => {
+    // 玩家细胞被吃光后 playerCells 是空数组。早期实现读 cells[0].ownerId 会抛
+    // TypeError，异常从 Game.loop 抛出后 rAF 链断裂 → 整页卡死。
+    const empty = [];
+    const ai1 = ball(0, 0, 20, 'ai1');
+    const ai2 = ball(0, 0, 10, 'ai2');
+    let entries = null;
+    assert.doesNotThrow(() => { entries = leaderboardEntries(empty, [ai1, ai2], 5); },
+        '玩家全灭时算排行榜不能抛异常');
+    assert.equal(entries.length, 2, '只剩 AI 还在榜上');
+    assert.equal(entries.some((e) => e.isPlayer), false, '死人不该出现在排行榜里');
+
+    assert.doesNotThrow(() => rankOfGroup(0, [ai1, ai2]), '玩家全灭时算名次不能抛异常');
+    assert.equal(rankOfGroup(0, [ai1, ai2]), 3, '质量 0 时排在所有球之后');
+});
+
+test('结算名次用死亡瞬间的质量，而不是清空后的 0', () => {
+    const heavy = ball(0, 0, 30, 'heavy'); // 900
+    const light = ball(0, 0, 8, 'light'); // 64
+    const others = [heavy, light];
+    // 玩家死前有 500 质量（r=10 + r=20 两个分身）→ 只被 heavy 压过 → 第 2 名
+    assert.equal(rankOfGroup(500, others), 2);
+    // 错用清空后的 0 就会变成第 3 名
+    assert.equal(rankOfGroup(0, others), 3);
 });
 
 // ---------- 出生保护 ----------
