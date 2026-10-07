@@ -59,23 +59,35 @@ export class Camera {
             }
         }
 
+        this.clampView();
+    }
+
+    // 视口超出世界范围时钳制回来
+    clampView() {
         // 更新视口矩形
         this.viewportRect.set(this.xView, this.yView);
 
-        // 视口超出世界范围时钳制回来
-        if (!this.viewportRect.within(this.worldRect)) {
-            if (this.viewportRect.left < this.worldRect.left) {
-                this.xView = this.worldRect.left;
-            }
-            if (this.viewportRect.top < this.worldRect.top) {
-                this.yView = this.worldRect.top;
-            }
-            if (this.viewportRect.right > this.worldRect.right) {
-                this.xView = this.worldRect.right - this.wView;
-            }
-            if (this.viewportRect.bottom > this.worldRect.bottom) {
-                this.yView = this.worldRect.bottom - this.hView;
-            }
+        if (this.viewportRect.within(this.worldRect)) {
+            return;
         }
+        if (this.viewportRect.left < this.worldRect.left) {
+            this.xView = this.worldRect.left;
+        }
+        if (this.viewportRect.top < this.worldRect.top) {
+            this.yView = this.worldRect.top;
+        }
+        if (this.viewportRect.right > this.worldRect.right) {
+            this.xView = this.worldRect.right - this.wView;
+        }
+        if (this.viewportRect.bottom > this.worldRect.bottom) {
+            this.yView = this.worldRect.bottom - this.hView;
+        }
+    }
+
+    // 立刻把视口居中到目标身上（重生、传送用），避免相机慢慢追过去
+    snapTo(target) {
+        this.xView = target.x - this.wView / 2;
+        this.yView = target.y - this.hView / 2;
+        this.clampView();
     }
 }

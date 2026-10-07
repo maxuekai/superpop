@@ -25,12 +25,72 @@ body {
     font-size: 15px;
     color: #fff;
     line-height: 1.4;
-    background-color: rgba(0, 0, 0, 0.45);
+    /* 压得够实，否则大球从面板后面透出来会把数字冲淡 */
+    background-color: rgba(0, 0, 0, 0.62);
 
     position: fixed;
     top: 12px;
     left: 12px;
     z-index: 1;
+    /* 纯展示，别挡住摇杆 */
+    pointer-events: none;
+}
+
+/* 排行榜：右上角，纯展示（pointer-events: none 让触摸穿透给摇杆） */
+.leaderboard {
+    min-width: 132px;
+    padding: 8px 10px;
+    border-radius: 12px;
+
+    font-size: 13px;
+    line-height: 1.5;
+    color: #fff;
+    background-color: rgba(0, 0, 0, 0.62);
+
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.leaderboard-title {
+    margin-bottom: 2px;
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+.leaderboard-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.leaderboard-item {
+    display: flex;
+    gap: 6px;
+}
+
+.leaderboard-item .lb-rank {
+    width: 14px;
+    opacity: 0.6;
+}
+
+.leaderboard-item .lb-name {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.leaderboard-item .lb-weight {
+    opacity: 0.8;
+}
+
+/* 自己那一行高亮 */
+.leaderboard-item.me {
+    font-weight: 600;
+    color: #8ff0cd;
 }
 
 .control-panel {
@@ -59,4 +119,102 @@ body {
     margin-left: -22px;
     top: 50%;
     margin-top: -22px;
+}
+
+/* 开局 / 结算弹层：盖住全屏，游戏逻辑此时是暂停的 */
+.overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+
+    background-color: rgba(3, 20, 18, 0.72);
+
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+}
+
+.overlay.hidden {
+    display: none;
+}
+
+.dialog {
+    width: 100%;
+    max-width: 320px;
+    text-align: center;
+    color: #fff;
+}
+
+.dialog h1 {
+    margin: 0 0 10px;
+    font-size: 24px;
+}
+
+.dialog p {
+    margin: 6px 0;
+    font-size: 14px;
+    opacity: 0.85;
+}
+
+.dialog p.tip {
+    font-size: 13px;
+    opacity: 0.7;
+}
+
+.settle-stats {
+    display: flex;
+    justify-content: center;
+    gap: 18px;
+    margin: 12px 0 4px;
+}
+
+.settle-stats .value {
+    display: block;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.settle-stats .label {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.nickname {
+    width: 100%;
+    margin: 14px 0 10px;
+    padding: 11px 14px;
+
+    font-family: inherit;
+    font-size: 16px;
+    text-align: center;
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+    outline: none;
+}
+
+.nickname::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.btn {
+    width: 100%;
+    padding: 12px 0;
+
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    color: #06231f;
+    background-color: #6ee7c3;
+    border: none;
+    border-radius: 999px;
+}
+
+.btn:active {
+    transform: scale(0.98);
 }

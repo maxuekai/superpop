@@ -3,7 +3,11 @@ import { distance, edgeOffsetX, edgeOffsetY } from '../core/utils.js';
 
 // 浮动虚拟摇杆（touch 事件）：按住屏幕任意位置，摇杆面板出现在手指处，
 // 拖动方向写入 player.speedX/speedY，松手摇杆消失、球停止。
+// 不处理「界面元素」（.ui-interactive：开局/结算弹层、输入框、按钮）上的触摸，
+// 否则 preventDefault 会把按钮点击和输入框聚焦一起吞掉。
 // TODO: 只支持触屏，桌面鼠标不可用（见 TODO.md「输入」）
+const UI_SELECTOR = '.ui-interactive';
+
 export class Joystick {
     constructor(controlPanel, player) {
         this.controlPanel = controlPanel;
@@ -22,16 +26,30 @@ export class Joystick {
         this.handleEvent = this.handleEvent.bind(this);
     }
 
+    // 触摸是否落在界面元素上（这类触摸要留给界面自己处理）
+    isUiTarget(target) {
+        return Boolean(target && target.closest && target.closest(UI_SELECTOR));
+    }
+
+    // 当前是否正在用手指操控（键盘检测到就自动让位）
+    get isActive() {
+        return this.touchId !== null;
+    }
+
     handleEvent(e) {
         const event = e || window.event;
 
         switch (event.type) {
             case 'touchstart':
-                e.preventDefault();
                 // 已有操控中的手指则忽略（避免多指抢控）
                 if (this.touchId !== null) {
                     return;
                 }
+                // 界面上的触摸不接管，也不阻止默认行为
+                if (this.isUiTarget(event.target)) {
+                    return;
+                }
+                e.preventDefault();
                 {
                     const touch = event.changedTouches[0];
                     this.touchId = touch.identifier;
@@ -58,8 +76,8 @@ export class Joystick {
                         return;
                     }
                     // 手指相对按下原点的位置
-                    let tempX = touch.clientX - this.originX;
-                    let tempY = touch.clientY - this.originY;
+                    const tempX = touch.clientX - this.originX;
+                    const tempY = touch.clientY - this.originY;
 
                     // 超出圆形范围时固定在边缘
                     if (distance(tempX, tempY, 0, 0) >= JOYSTICK.radius) {
@@ -73,6 +91,12 @@ export class Joystick {
                     this.knob.style.left = this.diffX + JOYSTICK.centerOffset + 'px';
                     this.knob.style.top = this.diffY + JOYSTICK.centerOffset + 'px';
 
+                    // 死区：手指没怎么动就别动球，避免手抖漂移
+                    if (distance(tempX, tempY, 0, 0) < JOYSTICK.deadZone) {
+                        this.player.speedX = 0;
+                        this.player.speedY = 0;
+                        return;
+                    }
                     this.player.speedX = this.diffX || 0;
                     this.player.speedY = this.diffY || 0;
                 }

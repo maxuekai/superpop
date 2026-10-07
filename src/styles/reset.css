@@ -1,3 +1,9 @@
+/* 统一盒模型。缺了这一条，input[type=text] 是 content-box、button 是 border-box，
+   于是同样写 width:100% 的输入框会比按钮宽出一截 padding+border（开局/结算界面都中招）。 */
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
 html, body, div, span, iframe, h1, h2, h3, h4, h5, h6, p, blockquote,a,address,
 em, img, ol, ul, li, fieldset, form, label, legend, table, tbody, tfoot, thead, tr, th, td,i,b,s {
     margin:0; padding:0; border:0; font-weight:inherit; font-style:inherit; font-size:100%;font-family: Helvetica,Arial,sans-serif;

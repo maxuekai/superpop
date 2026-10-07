@@ -14,7 +14,6 @@ const randomColor = ['#fff', '#ff9797', '#97eaff', '#97ffbe', '#f4ff97', '#ffb79
 const players = [];
 
 app.use('/src', express.static('src'));
-app.use('/assets', express.static('assets'));
 app.get('/', (req, res) => {
     res.sendFile(fileURLToPath(new URL('../index.html', import.meta.url)));
 });

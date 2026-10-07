@@ -11,11 +11,51 @@
 
 <body>
     <div class="container">
-        <div class="weight-panel">体重：<span class="weight">112</span>kg</div>
+        <div class="weight-panel">体重：<span class="weight">100</span>kg</div>
+        <div class="leaderboard">
+            <div class="leaderboard-title">排行榜</div>
+            <ol class="leaderboard-list"></ol>
+        </div>
         <div class="control-panel">
-            <i class="direction-control draggable" id="control-btn"></i>
+            <i class="direction-control"></i>
         </div>
         <canvas id="ball" width="667" height="375"></canvas>
+
+        <!-- 开局界面：ui-interactive 让摇杆不抢这些触摸 -->
+        <div class="overlay ui-interactive start-overlay">
+            <div class="dialog">
+                <h1>球球大作战</h1>
+                <p class="tip">按住屏幕任意位置拖动操控（电脑用 WASD / 方向键），吃食物长大。<br>小心比你大的球。</p>
+                <input class="nickname start-nickname" type="text" placeholder="输入昵称" autocomplete="off"
+                    enterkeyhint="done">
+                <button class="btn start-btn" type="button">开始游戏</button>
+            </div>
+        </div>
+
+        <!-- 结算界面 -->
+        <div class="overlay ui-interactive settlement-overlay hidden">
+            <div class="dialog">
+                <h1>被吃掉了</h1>
+                <div class="settle-stats">
+                    <div>
+                        <span class="value"><span class="final-weight">0</span>kg</span>
+                        <span class="label">最终体重</span>
+                    </div>
+                    <div>
+                        <span class="value">第 <span class="final-rank">1</span> 名</span>
+                        <span class="label">最终排名</span>
+                    </div>
+                    <div>
+                        <span class="value final-time">0:00</span>
+                        <span class="label">存活时长</span>
+                    </div>
+                </div>
+                <p class="final-detail"></p>
+                <input class="nickname respawn-nickname" type="text" placeholder="输入昵称" autocomplete="off"
+                    enterkeyhint="done">
+                <button class="btn respawn-btn" type="button">再来一局</button>
+            </div>
+        </div>
     </div>
 
     <!-- 联机接入后由 src/net/client.js 负责加载 socket.io -->

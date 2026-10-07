@@ -25,11 +25,25 @@ const contentTypes = {
     '.ico': 'image/x-icon',
 };
 
+// 只放行游戏真正需要的静态文件，避免整个仓库（package-lock.json / server / .git / node_modules）
+// 在局域网里被手机直接下载。qr.png 是给手机扫码用的，保留。
+const allowedPrefixes = ['/src/', '/index.html', '/qr.png', '/favicon.ico'];
+
+function isAllowed(pathname) {
+    return allowedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(prefix));
+}
+
 const server = http.createServer(async (req, res) => {
     try {
         let pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
         if (pathname === '/') {
             pathname = '/index.html';
+        }
+
+        if (!isAllowed(pathname)) {
+            res.writeHead(404);
+            res.end('Not Found');
+            return;
         }
 
         const filePath = resolve(root, '.' + pathname);
