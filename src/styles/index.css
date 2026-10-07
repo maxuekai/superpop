@@ -149,6 +149,22 @@ body {
     z-index: 2;
 }
 
+.division.ready {
+    animation: split-ready 1.4s ease-in-out infinite;
+}
+
+/* 可分裂时轻微呼吸 + 描边外扩，避免"按钮悄悄冒出来没人发现" */
+@keyframes split-ready {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(143, 240, 205, 0.55);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 0 10px rgba(143, 240, 205, 0);
+        transform: scale(1.06);
+    }
+}
+
 .division.cooling {
     color: #cfe9e2;
     background-color: rgba(255, 255, 255, 0.16);
