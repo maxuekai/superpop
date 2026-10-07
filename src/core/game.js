@@ -1,4 +1,4 @@
-import { AI, COLORS, FOOD, NAMES, PLAYER, PLAYER_OWNER, SPAWN, SPLIT, TICK, VIEW, WORLD } from '../config.js';
+﻿import { AI, COLORS, FOOD, NAMES, PLAYER, PLAYER_OWNER, SPAWN, SPLIT, TICK, VIEW, WORLD } from '../config.js';
 import { AiPlayer } from './ai.js';
 import { Camera } from './camera.js';
 // 改名导入：原本叫 Map 的话，本文件里就不能再用全局的 Map（会遮蔽）
@@ -9,6 +9,7 @@ import {
     dueRespawns,
     excessToRemove,
     groupMass,
+    isOutsideView,
     isSpawnClear,
     leaderboardEntries,
     mergeCells,
@@ -142,18 +143,28 @@ export class Game {
 
     // 找一个不会「一出生就被吃掉」的空位：判定交给 rules.isSpawnClear，
     // 这里只负责多试几次；margin 还要让出生点远离世界边缘，
-    // 否则相机会被钳在边上、球偏在屏幕一角
-    safeSpawnPosition(radius, edgeGap = SPAWN.edgeGap) {
+    // 否则相机会被钳在边上、球偏在屏幕一角。
+    // preferOffscreen=true 时优先挑相机视口之外的点——AI 在你眼前凭空出现会很像"闪现"。
+    safeSpawnPosition(radius, edgeGap = SPAWN.edgeGap, preferOffscreen = false) {
         const margin = radius + 8 + edgeGap;
         let fallback = null;
         for (let attempt = 0; attempt < 60; attempt += 1) {
             const pos = this.randomPosition(margin);
             fallback = pos;
-            if (isSpawnClear(pos, radius, this.balls)) {
-                return pos;
+            if (!isSpawnClear(pos, radius, this.balls)) {
+                continue;
             }
+            if (preferOffscreen && attempt < 40 && !isOutsideView(pos, this.viewRect(), SPAWN.edgeGap)) {
+                continue; // 前 40 次都在找屏幕外的位置
+            }
+            return pos;
         }
         return fallback || this.randomPosition(margin);
+    }
+
+    // 当前相机视口（世界坐标），供出生位置判断用
+    viewRect() {
+        return { x: this.camera.xView, y: this.camera.yView, w: this.camera.wView, h: this.camera.hView };
     }
 
     // 生成一颗食物：先找一个避开所有球的簇心，再让这颗落在簇内（成簇更好找）
@@ -197,7 +208,7 @@ export class Game {
     spawnAi(count = 1) {
         for (let i = 0; i < count; i += 1) {
             const r = this.aiSpawnRadius(AI.spawnRadiusRatio);
-            const pos = this.safeSpawnPosition(r);
+            const pos = this.safeSpawnPosition(r, SPAWN.edgeGap, true);
             const ai = new AiPlayer(pos.x, pos.y, r, randomItem(COLORS), this.pickAiName());
             ai.foodGain = AI.foodGain;
             this.ai.push(ai);
@@ -232,7 +243,7 @@ export class Game {
 
     respawnAi(ai) {
         const r = this.aiSpawnRadius(AI.respawnRadiusRatio);
-        const pos = this.safeSpawnPosition(r);
+        const pos = this.safeSpawnPosition(r, SPAWN.edgeGap, true);
         ai.reset(pos.x, pos.y, r, randomItem(COLORS));
         ai.foodGain = AI.foodGain;
         ai.name = this.pickAiName();

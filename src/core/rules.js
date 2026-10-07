@@ -41,7 +41,8 @@ export function resolveEatings(balls, now) {
     for (const [eater, victim] of pairs) {
         victim.alive = false;
         eatenList.push(victim);
-        eater.absorb(victim);
+        // eatBonus 让 AI 吃人长得更明显（实测不吃倍率时互吃太稀疏、玩家几乎看不到）
+        eater.absorb(victim, eater.eatBonus || 1);
         eaten.set(eater, (eaten.get(eater) || 0) + 1);
     }
     return { victims: eatenList, eaten };
@@ -218,6 +219,18 @@ export function pickFreeName(used, names) {
     const free = names.filter((name) => !taken.has(name));
     const pool = free.length > 0 ? free : names;
     return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// 这个点是否落在相机视口之外（view = {x, y, w, h}，margin 为额外余量）。
+// AI 出生/重生时优先挑这种位置，否则会在玩家眼前"凭空闪现"。
+export function isOutsideView(pos, view, margin) {
+    if (!view || !view.w || !view.h) {
+        return true; // 视口还没算出来时不做限制
+    }
+    return pos.x < view.x - margin
+        || pos.x > view.x + view.w + margin
+        || pos.y < view.y - margin
+        || pos.y > view.y + view.h + margin;
 }
 
 // 出生点是否安全：远离所有存活的球，比目标大的留更宽的余量。

@@ -8,6 +8,8 @@ import { distance, randomFloat } from './utils.js';
 export class AiPlayer extends Ball {
     constructor(x, y, r, bColor, name) {
         super(x, y, r, bColor, name);
+        // 吃人收益倍率：让 AI 之间的互吃更明显（数值见 config.AI.eatBonus）
+        this.eatBonus = AI.eatBonus;
         this.thinkTimer = 0;
         this.wanderTimer = 0;
         this.wanderAngle = randomFloat(0, Math.PI * 2);

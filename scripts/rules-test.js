@@ -1,4 +1,4 @@
-// 玩法规则检查（无 DOM）：吃食物判定、大小互吃规则、质量吸收、AI 决策方向、速度随体型衰减。
+﻿// 玩法规则检查（无 DOM）：吃食物判定、大小互吃规则、质量吸收、AI 决策方向、速度随体型衰减。
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
@@ -12,6 +12,7 @@ import {
     dueRespawns,
     excessToRemove,
     groupMass,
+    isOutsideView,
     isSpawnClear,
     leaderboardEntries,
     mergeCells,
@@ -844,6 +845,33 @@ test('结算名次用死亡瞬间的质量，而不是清空后的 0', () => {
     assert.equal(rankOfGroup(500, others), 2);
     // 错用清空后的 0 就会变成第 3 名
     assert.equal(rankOfGroup(0, others), 3);
+});
+
+test('吃人收益倍率：AI 的 eatBonus 让互吃长得更明显', () => {
+    const predator = new AiPlayer(500, 500, 20, '#fff', 'ai');
+    predator.eatBonus = 1;
+    const prey = ball(500, 500, 10, 'prey');
+    predator.absorb(prey, predator.eatBonus);
+    const plain = Math.sqrt(predator.mass);
+
+    const boosted = new AiPlayer(500, 500, 20, '#fff', 'ai2');
+    boosted.eatBonus = 1.5;
+    boosted.absorb(ball(500, 500, 10, 'prey2'), boosted.eatBonus);
+    assert.ok(boosted.r > plain, `带倍率应该更大：${boosted.r.toFixed(2)} vs ${plain.toFixed(2)}`);
+    // 倍率 1 时等于纯公式
+    assert.ok(Math.abs(plain - Math.sqrt(400 + 100 * EAT.absorb)) < 1e-9);
+});
+
+test('出生点在视口外：避免 AI 在玩家眼前凭空闪现', () => {
+    const view = { x: 400, y: 300, w: 900, h: 500 };
+    const margin = 90;
+    assert.equal(isOutsideView({ x: 500, y: 400 }, view, margin), false, '视口内不算外部');
+    assert.equal(isOutsideView({ x: 100, y: 400 }, view, margin), true, '左侧外部');
+    assert.equal(isOutsideView({ x: 1400, y: 400 }, view, margin), true, '右侧外部');
+    assert.equal(isOutsideView({ x: 500, y: 950 }, view, margin), true, '下方外部');
+    assert.equal(isOutsideView({ x: 500, y: 850 }, view, margin), false, '边缘余量内仍算视口内');
+    // 视口未初始化时不限制
+    assert.equal(isOutsideView({ x: 0, y: 0 }, { x: 0, y: 0, w: 0, h: 0 }, margin), true);
 });
 
 // ---------- 出生保护 ----------

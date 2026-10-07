@@ -116,9 +116,10 @@ export class Ball {
         return this.outweighs(other) && distance(this.x, this.y, other.x, other.y) <= this.r;
     }
 
-    // 吸收对方质量：质量按 r² 累加后再开方回半径
-    absorb(other) {
-        this.r = Math.sqrt(this.mass + other.mass * EAT.absorb);
+    // 吸收对方质量：质量按 r² 累加后再开方回半径。
+    // bonus 是「吃人收益倍率」，AI 会用它让互吃长得更明显（默认 1）。
+    absorb(other, bonus = 1) {
+        this.r = Math.sqrt(this.mass + other.mass * EAT.absorb * bonus);
         this.onEat();
     }
 
