@@ -31,8 +31,19 @@ Math.random = () => {
 // ---------- 命令行参数 ----------
 
 const args = process.argv.slice(2);
+// 位置参数 = 既不是 flag、也不是某个 flag 的值 的数字。
+// 注意：`--divisor 60` 里的 60 是 flag 的值，不能再被当成位置参数（否则会顺手改掉 fleeRange）。
+const flagValues = new Set();
+for (let i = 0; i < args.length; i += 1) {
+    if (args[i].startsWith('--') && !args[i].includes('=')) {
+        flagValues.add(args[i + 1]);
+    }
+}
 const flags = args.filter((a) => a.startsWith('--'));
-const positional = args.filter((a) => !a.startsWith('--')).map(Number).filter((n) => Number.isFinite(n));
+const positional = args
+    .filter((a) => !a.startsWith('--') && !flagValues.has(a))
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
 const flagValue = (name) => {
     const hit = flags.find((f) => f === `--${name}` || f.startsWith(`--${name}=`));
     if (!hit) {
@@ -49,6 +60,9 @@ if (positional.length >= 2) AI.escapeProbe = positional[1];
 if (positional.length >= 3) AI.escapeWallWeight = positional[2];
 if (positional.length >= 4) AI.escapeFoodWeight = positional[3];
 if (positional.length >= 5) AI.escapeFoodRange = positional[4];
+// 速度相关（和 food-sim 用同一套公式，方便两边对照）
+if (flagValue('divisor') !== undefined) PLAYER.speedDivisor = flagValue('divisor');
+if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('slowdown');
 
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;

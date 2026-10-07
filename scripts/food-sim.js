@@ -17,6 +17,28 @@ Math.random = () => {
     return rngSeed / 2147483648;
 };
 
+// 命令行覆盖：--divisor / --speedUnit / --playerGain / --foodGain
+const args = process.argv.slice(2);
+const flagValue = (name) => {
+    const hit = args.find((a) => a === `--${name}` || a.startsWith(`--${name}=`));
+    if (!hit) {
+        return undefined;
+    }
+    const raw = hit.includes('=') ? hit.split('=')[1] : args[args.indexOf(hit) + 1];
+    const num = Number(raw);
+    return Number.isFinite(num) ? num : undefined;
+};
+if (flagValue('divisor') !== undefined) PLAYER.speedDivisor = flagValue('divisor');
+if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('slowdown');
+if (flagValue('playerGain') !== undefined) PLAYER.growthPerFood = flagValue('playerGain');
+if (flagValue('foodGain') !== undefined) AI.foodGain = flagValue('foodGain');
+
+// 与 Ball.update 同一套公式
+function speedOf(r) {
+    const divisor = PLAYER.speedDivisor + Math.max(0, r - PLAYER.radius) * PLAYER.slowdownPerRadius;
+    return (JOYSTICK.radius / divisor) * PLAYER.speedUnit;
+}
+
 // ---------- ① 静态指标 ----------
 
 const area = WORLD.width * WORLD.height;
@@ -35,6 +57,19 @@ console.log(`  世界 ${WORLD.width}×${WORLD.height}（${area} 单位²），�
 console.log(`  平均间距 ${spacing.toFixed(1)}，到最近食物的期望距离 ${nearestExpected.toFixed(1)} 世界单位`);
 console.log(`  进食判定半径 ${PLAYER.radius + FOOD.radius}，直线行进每 100 单位期望吃到 ${(perUnit * 100).toFixed(2)} 颗`);
 console.log(`  初始满速 ${speed.toFixed(0)} 单位/秒 → 直线觅食每秒期望吃到 ${(perUnit * speed).toFixed(2)} 颗`);
+
+// 速度剖面：慢不慢要用「跨屏/跨图要几秒」来判断，而不是看公式
+const desktopScale = Math.max(1280 / WORLD.width, 720 / WORLD.height, 1280 / 900);
+const screenSpan = 1280 / desktopScale; // 桌面视口宽度（世界单位）
+console.log('\n【速度剖面】速度 = 满舵 / (分母 + (r-初始半径) × 减速系数) × speedUnit');
+console.log(`  半径 | 速度(单位/秒) | 相对初始 | 跨屏(${screenSpan.toFixed(0)}单位) | 跨全图(${WORLD.width}单位)`);
+for (const r of [10, 15, 20, 30, 40, 50, 60, 80]) {
+    const v = speedOf(r);
+    const pct = (v / speedOf(PLAYER.radius)) * 100;
+    console.log(`  ${String(r).padStart(4)} | ${v.toFixed(1).padStart(12)} | ${pct.toFixed(0).padStart(8)}% `
+        + `| ${(screenSpan / v).toFixed(1).padStart(17)}s | ${(WORLD.width / v).toFixed(1).padStart(14)}s`);
+}
+console.log(`  目标手感参考：跨屏 5~7 秒比较跟手（>10 秒会明显觉得慢）`);
 
 for (const [label, cssW, cssH] of [['手机竖屏 390×844', 390, 844], ['桌面 1280×720', 1280, 720]]) {
     const scale = Math.max(cssW / WORLD.width, cssH / WORLD.height, Math.max(cssW, cssH) / 900);

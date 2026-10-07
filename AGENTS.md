@@ -80,7 +80,7 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 - 游戏状态机：`menu`（开局界面）→ `playing` → `dead`（结算界面）。只有 `playing` 才跑 `updateWorld`，弹层期间世界冻结。
 - 世界固定 1024×768；画布/视口随窗口变化，缩放规则见 `config.js` 的 `VIEW`：屏幕长边锚定 `VIEW.longEdgeWorld` 个世界单位，并按 `(r/初始半径)^VIEW.zoomExponent` 随体型放大视距，但不小于"窗口装下整个世界"的缩放（视口永不超过世界，否则相机钳制出负坐标）。相机是死区跟随（死区 = 半视口），靠边时视口会被钳在世界内，所以玩家在地图边缘时不会位于屏幕正中——这是既有设计。
 - 渲染按 `devicePixelRatio` 缩放，`Game.draw` 每帧 `setTransform` 后平移到相机视口，Map/Player 直接用世界坐标绘制。
-- 每步位移 = speedX / (speedDivisor + 超出初始半径部分 × slowdownPerRadius) × (dt × speedUnit)，越大越慢；摇杆/键盘直接写 `game.input`（未满舵时线性变速，手指位移小于 `JOYSTICK.deadZone` 不动球），松手（touchend）归零。
+- 每步位移 = speedX / (speedDivisor + 超出初始半径部分 × slowdownPerRadius) × (dt × speedUnit)，越大越慢；摇杆/键盘直接写 `game.input`（未满舵时线性变速，手指位移小于 `JOYSTICK.deadZone` 不动球），松手（touchend）归零。**调速度先看 `npm run sim:food` 的「速度剖面」**：跨屏时间 > 12 秒会明显觉得慢，5~7 秒比较跟手；当前 10.7s（r=10）/ 18.4s（r=50）。改速度必须同时用 `npm run sim` 复核「被逼墙比例」——AI 的探测距离（`escapeProbe`）是按速度标定的，不补偿会让 AI 看不见远处墙角（实测 1% → 11%）。
 - **"大球追不上"不要看速度公式下结论**：小体型段真正的门槛是互吃比例（`r > 对方r × 1.15`，差一点点就永远吃不到）；而速度只是一阶估算——实测猎手比猎物慢 40%（r=50 vs r=10：38.9 vs 64.4 单位/秒）仍能抓到 16/20，因为逃命 AI 达不到理论速度、有界地图躲不了角落、还会边逃边长大。`npm run sim -- --sweep` 是这条的验收口径。
 - 质量口径统一为 `r²`。玩家可以有**多个分身**（见下），体重面板与排行榜都按「整组质量之和」统计；
   单个球的吃食物收益 `r += 球自己的 foodGain`；互吃按 `EAT.ratio`(1.15) 的半径比判定，

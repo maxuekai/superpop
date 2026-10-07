@@ -39,12 +39,14 @@ export const ACTIONS = { split: ['Space'] };
 // 玩家与 AI 共用的移动/成长参数（Ball 基类统一读取）
 export const PLAYER = {
     radius: 10,
-    // speedX/speedY 每帧除以该值，相当于速度分母
-    speedDivisor: 60,
+    // speedX/speedY 每帧除以该值，相当于速度分母。
+    // 60 时满速 70 单位/秒、跨屏要 12.9 秒，实测偏慢；改成 50 → 84 单位/秒、10.7 秒
+    speedDivisor: 50,
     // 每吃一颗食物半径增长量
     growthPerFood: 0.5,
     // 半径每比初始大 1，速度分母增加多少（越大越慢，大球有"沉重感"）
-    slowdownPerRadius: 1.2,
+    // 1.2 时 r=50 只剩初始速度的 56%、跨屏 23 秒，太黏；0.9 → 58% / 18.4 秒
+    slowdownPerRadius: 0.9,
     // 吃到食物的视觉回弹：弹簧刚度/阻尼（每步），以及吃到时给视觉半径的速度增量
     springStiffness: 0.16,
     springDamping: 0.7,
@@ -91,7 +93,9 @@ export const AI = {
     // 逃离时不再沿「远离威胁」直线冲（会被逼到墙角撞死），
     // 而是从 escapeSamples 个均分方向里挑最优：离威胁更远、又不贴墙、不扎进别的球
     escapeSamples: 16,
-    escapeProbe: 120, // 候选方向的探测距离（世界单位）
+    // 候选方向的探测距离（世界单位）。它要跟得上速度：速度提上去后若不补偿，
+    // AI 看不见远处的墙角，贴墙比例会从 1% 飙到 11%（divisor=50 时的实测）
+    escapeProbe: 180,
     escapeWallWeight: 1, // 贴墙惩罚权重（越大越不敢靠边）
     escapeBallWeight: 1.2, // 撞向别的球的惩罚权重
     escapeBallGap: 26, // 与别的球保持的额外间距
