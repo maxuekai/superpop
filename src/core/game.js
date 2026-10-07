@@ -1,4 +1,4 @@
-﻿import { AI, COLORS, FOOD, NAMES, PLAYER, PLAYER_OWNER, SPAWN, SPLIT, TICK, VIEW, WORLD } from '../config.js';
+import { AI, COLORS, FOOD, NAMES, PLAYER, PLAYER_OWNER, SPAWN, SPLIT, TICK, VIEW, WORLD } from '../config.js';
 import { AiPlayer } from './ai.js';
 import { Camera } from './camera.js';
 // 改名导入：原本叫 Map 的话，本文件里就不能再用全局的 Map（会遮蔽）
@@ -22,7 +22,7 @@ import {
     splitCells,
     targetAiCount,
 } from './rules.js';
-import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem } from './utils.js';
+import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem, smoothTowards } from './utils.js';
 
 // 游戏主循环：逻辑按固定步长推进（update），渲染跟随屏幕刷新率（draw）。
 // 状态流转：menu（开局界面，逻辑暂停）→ playing → dead（结算界面，逻辑暂停）→ playing
@@ -290,6 +290,7 @@ export class Game {
         this.state = 'playing';
         // 保护从真正开局那一刻开始算（菜单界面里世界时间也在走，不能在构造时发）
         this.player.grantShield(PLAYER.spawnShield, this.time);
+        this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
         this.hud.hideStart();
     }
@@ -299,6 +300,7 @@ export class Game {
         this.resetPlayer(name);
         this.state = 'playing';
         this.player.grantShield(PLAYER.spawnShield, this.time);
+        this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
         this.hud.hideSettlement();
     }
@@ -309,6 +311,7 @@ export class Game {
     quitToMenu() {
         this.state = 'menu';
         this.resetPlayer();
+        this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
         this.hud.showStart();
     }
@@ -363,7 +366,7 @@ export class Game {
         for (const ball of this.balls) {
             ball.shielded = ball.alive && ball.isProtected(this.time);
         }
-        this.updateViewScale();
+        this.updateViewScale(dt);
         this.camera.follow(this.largestCell());
         this.camera.update();
         this.hud.update(dt, this);
@@ -471,17 +474,35 @@ export class Game {
 
         // 保证视口不大于整个世界（否则相机会被钳制出负坐标）
         this.fitScale = Math.max(cssWidth / this.world.width, cssHeight / this.world.height);
-        this.updateViewScale();
+        // 注意：这里**不**直接 snap。除了首次布局外都交给 update(dt) 平滑逼近——
+        // 手机地址栏收放会高频触发 resize，硬赋值就是"视角突然扩大"的元凶。
+        this.updateViewScale(0, !this.viewReady);
     }
 
-    // 视野缩放：屏幕长边锚定 VIEW.longEdgeWorld 个世界单位，并随体型放大视距
-    // 体型口径取「最大的分身」：分身分散时视野不会来回跳
-    updateViewScale() {
+    // 视野缩放：屏幕长边锚定 VIEW.longEdgeWorld 个世界单位，并随体型放大视距。
+    // 体型口径取「最大的分身」：分身分散时视野不会来回跳。
+    //
+    // ⚠ scale 必须是**平滑逼近**目标值的，不能直接赋值。目标缩放的来源全是硬跳变：
+    // 手机地址栏收放（visualViewport.resize，实测摆动 100px 让视口宽度一帧跳 12~15%）、
+    // 转屏、吃人（质量吸收）、分身合并（largestCell 变成 √2 r）。
+    // 直接赋值 = "视角突然扩大"。smoothTowards 的单帧变化幅度只跟"还差多少"成比例，
+    // 与跳变本身多大无关，所以再大的跳变也看不出来了。
+    // snap=true 用于首次布局与重开一局——那种情况本来就该立刻就位。
+    targetScale() {
         const sizeZoom = Math.pow(this.largestCell().r / PLAYER.radius, VIEW.zoomExponent);
-        this.scale = Math.max(
+        return Math.max(
             this.fitScale,
             Math.max(this.cssWidth, this.cssHeight) / (VIEW.longEdgeWorld * sizeZoom),
         );
+    }
+
+    updateViewScale(dt, snap = false) {
+        if (snap || !this.viewReady) {
+            this.scale = this.targetScale();
+            this.viewReady = true;
+        } else {
+            this.scale = smoothTowards(this.scale, this.targetScale(), VIEW.zoomLerp, dt);
+        }
         this.camera.setViewSize(this.cssWidth / this.scale, this.cssHeight / this.scale);
     }
 

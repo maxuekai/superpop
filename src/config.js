@@ -24,7 +24,15 @@ export const TICK = { fps: 60, maxSteps: 5 };
 // zoomExponent：视野随体型的缩放指数——半径翻倍，视距变为 2^zoomExponent 倍。
 // cameraDeadZone：相机死区占视口的比例（0.35 = 球可以偏离屏幕中心约 15% 而镜头不动）。
 // 别调太大：手机上视口很窄，死区接近 0.5（早期值）时球能飘到四分之一个屏幕外，容易找不到。
-export const VIEW = { longEdgeWorld: 900, zoomExponent: 0.35, cameraDeadZone: 0.35 };
+// zoomLerp：视野缩放的平滑速度（1/秒）。目标缩放每次都可能硬跳——地址栏收放、
+// 转屏、吃人、分身合并——直接赋值就是"视角突然扩大"（实测竖屏地址栏摆动 100px
+// 会让视口宽度一帧内跳 12~15%）。6 → 一帧最多追上差距的 9.5%，95% 用 500ms。
+export const VIEW = {
+    longEdgeWorld: 900,
+    zoomExponent: 0.35,
+    cameraDeadZone: 0.35,
+    zoomLerp: 6,
+};
 
 // 食物：count 颗、半径 radius，成簇生成（clusterSize 颗/簇，簇半径 clusterRadius）。
 // 成簇是因为散点太难点——单颗食物在手机上只有几个像素，散开时等于「擦身而过」。

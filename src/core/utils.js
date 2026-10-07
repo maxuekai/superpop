@@ -30,6 +30,18 @@ export function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
 
+// 指数平滑：一帧最多追上「当前差距」的 (1 - e^(-rate·dt))。
+// 关键性质是**单帧变化幅度与跳变大小无关**，只跟差距成比例——
+// 无论目标值突然跳 1% 还是 30%，单帧位移都被 rate 限住，所以不会看出"突然一下"。
+// 线性插值（current + (target-current) * t）做不到这点：t 固定时跳变越大单帧越猛。
+// rate=6 时一帧最多追上 9.5%，63% 需要 167ms、95% 需要 500ms。
+export function smoothTowards(current, target, rate, dt) {
+    if (!(rate > 0) || !(dt > 0)) {
+        return current;
+    }
+    return current + (target - current) * (1 - Math.exp(-rate * dt));
+}
+
 // 成簇食物里，某一颗相对簇心的偏移：方向随机、半径内距离随机
 export function clusterOffset(clusterRadius) {
     const angle = randomFloat(0, Math.PI * 2);

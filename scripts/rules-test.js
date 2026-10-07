@@ -2,7 +2,7 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, KING, NAMES, PLAYER, SPLIT, WORLD as WORLD_CONFIG } from '../src/config.js';
+import { AI, EAT, FOOD, JOYSTICK, KING, NAMES, PLAYER, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { Camera } from '../src/core/camera.js';
@@ -25,7 +25,7 @@ import {
     splitCells,
     targetAiCount,
 } from '../src/core/rules.js';
-import { clusterOffset } from '../src/core/utils.js';
+import { clusterOffset, smoothTowards } from '../src/core/utils.js';
 import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
@@ -913,6 +913,35 @@ test('摇杆：界面元素上的触摸不接管、不 preventDefault（否则�
 function distance2(x, y) {
     return Math.sqrt(x * x + y * y);
 }
+
+test('视野缩放平滑：单帧变化幅度与跳变大小无关（治"视角突然扩大"）', () => {
+    const dt = STEP;
+    const rate = VIEW.zoomLerp;
+    // 真机实测：竖屏地址栏摆动 100px 会让视口宽度一帧内跳 12~15%；
+    // 转屏（444 → 1280 世界单位宽）能跳 188%。两种都不该在一帧内走完。
+    for (const jump of [0.02, 0.15, 0.5, 1.88, 3.0]) {
+        const next = smoothTowards(1.0, 1.0 + jump, rate, dt);
+        const moved = Math.abs(next - 1.0);
+        assert.ok(moved < jump, `跳变 ${(jump * 100).toFixed(0)}% 不能一帧走完（实际 ${(moved * 100).toFixed(2)}%）`);
+    }
+    // 核心性质：跳变 1% 与跳变 300%，单帧位移比例完全一样
+    const small = (smoothTowards(1.0, 1.01, rate, dt) - 1.0) / 0.01;
+    const huge = (smoothTowards(1.0, 4.0, rate, dt) - 1.0) / 3.0;
+    assert.ok(Math.abs(small - huge) < 1e-9, `单帧比例应与跳变大小无关：${small} vs ${huge}`);
+
+    // 收敛：95% 的距离在 1.5s 内走完（rate=6 → 3/rate）
+    let v = 1.0;
+    for (let i = 0; i < Math.round(1.5 / dt); i += 1) {
+        v = smoothTowards(v, 2.0, rate, dt);
+    }
+    assert.ok(v > 1.95, `1.5s 内应接近目标，实际 ${v.toFixed(4)}`);
+});
+
+test('视野缩放平滑：rate 或 dt 为 0 时原地不动（别在暂停/首帧乱动）', () => {
+    assert.equal(smoothTowards(1.0, 2.0, 0, STEP), 1.0);
+    assert.equal(smoothTowards(1.0, 2.0, VIEW.zoomLerp, 0), 1.0);
+    assert.equal(smoothTowards(1.0, 2.0, -1, STEP), 1.0);
+});
 
 test('AI 昵称不重名：同屏 AI 不会有两个「芋圆」', () => {
     // 模拟逐个出生：每次都避开当前存活 AI 已占用的名字
