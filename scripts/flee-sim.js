@@ -1,4 +1,4 @@
-// AI 逃跑能力仿真：模拟「一个满舵直线追击的猎手」追若干 AI，统计存活时间与被逼墙次数。
+﻿// AI 逃跑能力仿真：模拟「一个满舵直线追击的猎手」追若干 AI，统计存活时间与被逼墙次数。
 // 用途：调 AI 难度/逃跑参数（config.js 的 AI.escape*、fleeRange 等）时，先在这里看整体效果，
 // 比在手机上反复试省事。无 DOM，直接 `npm run sim` 运行。
 //
@@ -8,14 +8,14 @@
 //                                      escapeFoodWeight / escapeFoodRange
 //   npm run sim -- --sweep             扫猎手半径 10~50，看「大球到底能不能追上」（见下方闭环速度对照）
 //   npm run sim -- --hunter 30 --prey 15   指定猎手半径与猎物半径
-import { AI, JOYSTICK, PLAYER } from '../src/config.js';
+import { AI, JOYSTICK, PLAYER, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { resolveOverlaps } from '../src/core/rules.js';
 import { distance } from '../src/core/utils.js';
 
 const STEP = 1 / 60;
-const WORLD = { width: 1024, height: 768 };
+const WORLD = WORLD_CONFIG; // 从 config 导入，别再硬编码——世界放大后这里不改就成了在旧地图上测
 const RUN_SECONDS = 60;
 const TRIALS = 20;
 const CORNER_CLEARANCE = 50; // 离边界小于该值算「被逼到墙角」
@@ -64,6 +64,10 @@ if (positional.length >= 5) AI.escapeFoodRange = positional[4];
 // 速度相关（和 food-sim 用同一套公式，方便两边对照）
 if (flagValue('divisor') !== undefined) PLAYER.speedDivisor = flagValue('divisor');
 if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('slowdown');
+// 世界尺寸覆盖：地图放大直接改变"能不能追上"（AI 有更多地方躲），
+// 定 WORLD 时必须在这里扫一遍，不能只看成长曲线。
+if (flagValue('worldW') !== undefined) WORLD.width = flagValue('worldW');
+if (flagValue('worldH') !== undefined) WORLD.height = flagValue('worldH');
 
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;

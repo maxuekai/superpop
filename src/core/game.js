@@ -9,6 +9,7 @@ import {
     dueRespawns,
     excessToRemove,
     groupMass,
+    isCrowned,
     isOutsideView,
     isSpawnClear,
     leaderboardEntries,
@@ -325,6 +326,24 @@ export class Game {
             food: this.foodEaten,
             kills: this.kills,
             name: this.playerName,
+            crowned: false,
+        });
+    }
+
+    // 称王：单局的终点（质量达标 + 当前第一），与死亡一样把世界冻住。
+    onCrowned() {
+        const mass = this.playerMass();
+        this.input.speedX = 0;
+        this.input.speedY = 0;
+        this.state = 'crowned';
+        this.hud.showSettlement({
+            weight: Math.round(mass),
+            rank: 1,
+            time: this.playTime,
+            food: this.foodEaten,
+            kills: this.kills,
+            name: this.playerName,
+            crowned: true,
         });
     }
 
@@ -378,6 +397,11 @@ export class Game {
         if (this.syncTimer <= 0) {
             this.syncTimer = AI.syncInterval;
             this.syncAiCount();
+        }
+
+        // 单局终点：称王。放最后，保证同帧里刚吃到的质量、刚排好的名次都算进去。
+        if (isCrowned(this.playerMass(), this.ai)) {
+            this.onCrowned();
         }
     }
 

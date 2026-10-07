@@ -1,4 +1,4 @@
-import { AI, HUD, PLAYER, SPLIT } from '../config.js';
+import { AI, HUD, KING, PLAYER, SPLIT } from '../config.js';
 import { clamp, distance } from './utils.js';
 
 // 玩法裁定层：把「一帧内发生什么」写成纯函数，不碰 canvas / DOM，
@@ -109,6 +109,17 @@ export function leaderboardEntries(cells, others, size = HUD.leaderboardSize) {
 
 // AI 数量目标：玩家越大场上对手越多，但不超 AI.count。
 // 开局只按这个数放 AI，否则一上来满屏对手容易被围。
+// 称王判定：单局的终点条件。
+// 两个条件缺一不可：质量够（KING.mass）且当前第一（rankOfGroup === 1）。
+// 只看质量会被小号互喂刷上去——场上 AI 也在长，谁都有可能先到线。
+// 放在这里而不是 Game 里，是为了能单测（core 不碰 canvas/DOM）。
+export function isCrowned(mass, others) {
+    if (mass < KING.mass) {
+        return false;
+    }
+    return rankOfGroup(mass, others) === 1;
+}
+
 export function targetAiCount(playerRadius) {
     const growth = playerRadius / PLAYER.radius - 1;
     return clamp(AI.minCount + Math.floor(growth / 1.5), AI.minCount, AI.count);

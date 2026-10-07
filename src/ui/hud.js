@@ -29,6 +29,7 @@ export class Hud {
         this.settleWeightEl = root.querySelector('.final-weight');
         this.settleRankEl = root.querySelector('.final-rank');
         this.settleTimeEl = root.querySelector('.final-time');
+        this.settleTitleEl = root.querySelector('.settle-title');
         this.settleDetailEl = root.querySelector('.final-detail');
 
         this.splitBtn = root.querySelector('.division');
@@ -205,6 +206,16 @@ export class Hud {
     }
 
     showSettlement(stats) {
+        // 同一个结算界面复用两种结局：被吃掉 / 称王
+        if (this.settleTitleEl) {
+            this.settleTitleEl.textContent = stats.crowned ? '称王！' : '被吃掉了';
+        }
+        if (this.settleDetailEl) {
+            const base = `吃掉 ${stats.food} 颗食物 · 吞掉 ${stats.kills} 个球`;
+            this.settleDetailEl.textContent = stats.crowned
+                ? `你成了场上最大的球 · ${base}`
+                : base;
+        }
         if (this.settleWeightEl) {
             this.settleWeightEl.textContent = String(stats.weight);
         }
@@ -213,9 +224,6 @@ export class Hud {
         }
         if (this.settleTimeEl) {
             this.settleTimeEl.textContent = formatTime(stats.time);
-        }
-        if (this.settleDetailEl) {
-            this.settleDetailEl.textContent = `吃掉 ${stats.food} 颗食物 · 吞掉 ${stats.kills} 个球`;
         }
         if (this.respawnInput) {
             this.respawnInput.value = String(stats.name || '').slice(0, NICKNAME.maxLength);

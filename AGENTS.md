@@ -66,7 +66,13 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 - **新增玩法规则优先写进 `core/rules.js`**（纯函数、不碰 DOM），`Game` 只负责调度与渲染——只有这样才能被单测覆盖。
 - **固定步长**：`Game.loop` 用累加器按 `TICK.fps`(60) 推进，每帧上限 `maxSteps` 步，超出丢积压；渲染跟随刷新率。
   `Ball.update(dt)` 的位移与弹簧都乘 `dt * speedUnit`，否则 120Hz 手机上球速会是 60Hz 的两倍。
-- **状态机**：`menu` → `playing` → `dead`。只有 `playing` 跑 `updateWorld`，弹层期间世界冻结。
+- **状态机**：`menu` → `playing` → `dead`（被吃）/ `crowned`（称王）。只有 `playing` 跑 `updateWorld`，
+  弹层期间世界冻结。称王条件在 `rules.isCrowned`（质量 ≥ `KING.mass` **且**当前第一）。
+- **世界尺寸与食物数必须同步**：`WORLD` 和 `FOOD.count` 一起改，保持面密度 λ 不变
+  （屏内食物数 = λ × 视口面积）。地图放大还会顺带松开 `updateViewScale` 里的 `fitScale` 地板，
+  让 `zoomExponent` 真正生效——1024×768 时手机竖屏在 r≈6.5 就被钳死，等于没缩放。
+- **改 WORLD 前必须扫追击难度**：`npm run sim -- --worldW X --worldH Y`。地图越大 AI 越抓不到
+  （2048×1536 时被吃率从 20/20 掉到 2/20，游戏会退化成纯刷食物）。想延长单局请调 `KING.mass`。
 - **输入层是 `game.input`**，摇杆与键盘都写它，再由 `updateWorld` 同步给每一个分身——
   分身不是一个球，直接共享球对象的话输入只会作用在其中一个上。
 - 渲染按 `devicePixelRatio` 缩放后平移到相机视口；食物**不烤进地图**，每帧按视口动态绘制并**按颜色合批**。

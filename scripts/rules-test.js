@@ -2,7 +2,7 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, NAMES, PLAYER, SPLIT } from '../src/config.js';
+import { AI, EAT, FOOD, JOYSTICK, KING, NAMES, PLAYER, SPLIT, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { Camera } from '../src/core/camera.js';
@@ -12,6 +12,7 @@ import {
     dueRespawns,
     excessToRemove,
     groupMass,
+    isCrowned,
     isOutsideView,
     isSpawnClear,
     leaderboardEntries,
@@ -29,7 +30,9 @@ import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
 const STEP = 1 / 60;
-const WORLD = { width: 1024, height: 768 };
+// 世界尺寸从 config 导入：硬编码过 1024×768，地图放大后单测还跑在旧地图上
+// ——这种"测试和真游戏用不同参数"的错最难发现。
+const WORLD = WORLD_CONFIG;
 
 const tests = [];
 
@@ -161,15 +164,18 @@ test('AI 威胁优先于猎物：附近有大球就不去追小球', () => {
 test('AI 被逼到墙边时不会往墙上冲（换哪一侧偏好都一样）', () => {
     // 威胁在左边、球贴着右边墙：沿「远离威胁」直线跑就等于往墙上撞。
     // escapePhase 是随机的，所以这里反复抽样，检验的是「永不撞墙」这个不变量。
+    // 坐标按 WORLD 算，不要写死——世界放大后写死 985 就跑到地图中间去了，测试会假通过。
     const world = { width: WORLD.width, height: WORLD.height };
-    const threat = ball(945, 400, 30, 'boss');
+    const wallX = WORLD.width - 39;
+    const midY = WORLD.height / 2;
+    const threat = ball(wallX - 40, midY, 30, 'boss');
     let diagonal = 0;
     for (let i = 0; i < 24; i += 1) {
-        const cornered = ai(985, 400, 10);
+        const cornered = ai(wallX, midY, 10);
         cornered.think([cornered, threat], []);
         cornered.steer(world, [cornered, threat]);
         assert.ok(cornered.speedX < 20, `第 ${i} 次不该往右墙冲，实际 speedX=${cornered.speedX}`);
-        assert.ok(cornered.x <= 985.001, '不该被墙顶出去');
+        assert.ok(cornered.x <= wallX + 0.001, '不该被墙顶出去');
         if (Math.abs(cornered.speedY) > 20) {
             diagonal += 1;
         }
@@ -180,8 +186,8 @@ test('AI 被逼到墙边时不会往墙上冲（换哪一侧偏好都一样）',
 
 test('AI 贴角被围时会往内侧跑', () => {
     const world = { width: WORLD.width, height: WORLD.height };
-    const cornered = ai(1005, 15, 10);
-    const threat = ball(985, 30, 30, 'boss');
+    const cornered = ai(WORLD.width - 19, 15, 10);
+    const threat = ball(WORLD.width - 39, 30, 30, 'boss');
     for (let i = 0; i < 12; i += 1) {
         cornered.think([cornered, threat], []);
         cornered.steer(world, [cornered, threat]);
@@ -529,6 +535,20 @@ test('排行榜：玩家只占一条（按整组质量），AI 各占一条', ()
     assert.equal(entries[0].isPlayer, true);
     assert.equal(entries[0].weight, 500);
     assert.equal(entries.filter((e) => e.isPlayer).length, 1);
+});
+
+test('称王：质量够 + 当前第一才算称王（只看质量会被小号喂上去）', () => {
+    const small = ball(0, 0, 10, '小号');          // 100kg
+    const big = ball(0, 0, 60, '大号');            // 3600kg
+    assert.equal(isCrowned(KING.mass - 1, [small, big]), false, '质量不够不算');
+    assert.equal(isCrowned(KING.mass, [small, big]), true, '够大且领先 → 称王');
+    // 名次只看"有没有人比我重"，与数组顺序无关
+    assert.equal(isCrowned(KING.mass, [big, small]), true, '顺序不影响名次');
+    const overlord = ball(0, 0, 200, '霸主');      // 40000kg > 30000
+    assert.equal(isCrowned(KING.mass, [overlord]), false, '有更大的 AI 在 → 不算第一');
+    assert.equal(isCrowned(KING.mass, [small]), true, '场上没别人了 → 第一');
+    // 分身也算数：整组质量达标就算
+    assert.equal(isCrowned(KING.mass + 1, [small]), true);
 });
 
 test('AI 数量目标：随玩家体型单调不减，且有上下限', () => {
