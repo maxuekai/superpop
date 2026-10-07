@@ -35,6 +35,25 @@ export class AiPlayer extends Ball {
 
     // 挑目标：最近的威胁 / 最近的猎物 / 最近的食物
     think(balls, foodList) {
+        // 别的 AI 已经盯上的目标就不抢：不这么做的话一堆 AI 会同时奔向同一个球
+        // 或同一颗食物，走成一条线（玩家看着就像"AI 不闪避"）
+        const claimedBalls = new Set();
+        const claimedFood = new Set();
+        for (const other of balls) {
+            if (other === this || !other.alive) {
+                continue;
+            }
+            if (other.targetBall && !other.fleeing) {
+                claimedBalls.add(other.targetBall);
+            }
+            if (other.targetFood) {
+                claimedFood.add(other.targetFood);
+            }
+            if (other.escapeFood) {
+                claimedFood.add(other.escapeFood);
+            }
+        }
+
         let threat = null;
         let threatDist = Infinity;
         let prey = null;
@@ -50,7 +69,7 @@ export class AiPlayer extends Ball {
                     threat = other;
                     threatDist = d;
                 }
-            } else if (this.outweighs(other) && d < AI.chaseRange && d < preyDist) {
+            } else if (this.outweighs(other) && d < AI.chaseRange && d < preyDist && !claimedBalls.has(other)) {
                 prey = other;
                 preyDist = d;
             }
@@ -60,6 +79,9 @@ export class AiPlayer extends Ball {
         let nearestFood = null;
         let nearestFoodDist = Infinity;
         for (const food of foodList) {
+            if (claimedFood.has(food)) {
+                continue; // 已经有人在路上了
+            }
             const d = distance(this.x, this.y, food.x, food.y);
             if (d < nearestFoodDist) {
                 nearestFood = food;
@@ -147,7 +169,29 @@ export class AiPlayer extends Ball {
         return { dx: bestDx, dy: bestDy };
     }
 
-    // 把当前目标换算成方向：朝目标走，同时躲开边界，最后写进 speedX/speedY
+    // 与其他球保持距离：逃跑之外的模式（觅食/追击/游走）也要避让，
+    // 否则几个 AI 会贴着走同一条线，看起来像"不会闪避"。
+    // ignore 传当前威胁——逃跑时 escapeDirection 已经把威胁算过一次，重复叠加会
+    // 让猎物过分灵活、玩家根本追不上。
+    separation(balls, ignore) {
+        let sx = 0;
+        let sy = 0;
+        for (const other of balls) {
+            if (other === this || other === ignore || !other.alive) {
+                continue;
+            }
+            const d = distance(this.x, this.y, other.x, other.y);
+            const want = this.r + other.r + AI.avoidGap;
+            if (d > 0.001 && d < want) {
+                const push = (want - d) / want;
+                sx += ((this.x - other.x) / d) * push;
+                sy += ((this.y - other.y) / d) * push;
+            }
+        }
+        return { x: sx * AI.avoidWeight, y: sy * AI.avoidWeight };
+    }
+
+    // 把当前目标换算成方向：朝目标走，同时躲开边界与其他球，最后写进 speedX/speedY
     steer(world, balls) {
         let dx = 0;
         let dy = 0;
@@ -187,6 +231,12 @@ export class AiPlayer extends Ball {
         } else if (this.y > world.height - m) {
             dy -= ((this.y - (world.height - m)) / m) * 1.5;
         }
+
+        // 避让其他球：所有模式都生效（逃跑模式里 escapeDirection 已经算过一次，
+        // 这里只是再叠一层近距离的推开，不会冲突）
+        const sep = this.separation(balls, this.fleeing ? this.targetBall : null);
+        dx += sep.x;
+        dy += sep.y;
 
         const len = distance(dx, dy, 0, 0);
         if (len < 0.0001) {

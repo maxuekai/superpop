@@ -847,6 +847,33 @@ test('结算名次用死亡瞬间的质量，而不是清空后的 0', () => {
     assert.equal(rankOfGroup(0, others), 3);
 });
 
+test('AI 会互相避让：贴着走的两个 AI 会被推开，不走同一条线', () => {
+    const world = { width: WORLD.width, height: WORLD.height };
+    const a = new AiPlayer(400, 400, 10, '#fff', 'a');
+    const b = new AiPlayer(420, 400, 10, '#fff', 'b'); // 相距 20，远小于避让距离
+    const before = distance2(a.x, b.x) || 1;
+    const sep = a.separation([a, b]);
+    const len = Math.sqrt(sep.x * sep.x + sep.y * sep.y);
+    assert.ok(len > 0, '贴在一起必须产生排斥方向');
+    assert.ok(sep.x < 0, 'b 在右边，a 应该往左躲');
+    assert.ok(AI.avoidGap > 0);
+
+    // 逃跑时忽略当前威胁：否则和 escapeDirection 重复叠加，猎物会灵活到追不上
+    const threat = new AiPlayer(380, 400, 30, '#fff', 'boss');
+    const sep2 = a.separation([a, threat], threat);
+    assert.equal(sep2.x, 0, '指定 ignore 的球不参与避让');
+});
+
+test('AI 不抢别人已经盯上的目标', () => {
+    const food = [{ x: 515, y: 500 }, { x: 505, y: 500 }]; // A 离 other 近，B 离 hungry 近
+    const hungry = new AiPlayer(500, 500, 10, '#fff', 'hungry');
+    const other = new AiPlayer(520, 500, 10, '#fff', 'other');
+    other.think([other, hungry], food);
+    assert.equal(other.targetFood, food[0], 'other 应盯上离自己更近的 A');
+    hungry.think([hungry, other], food);
+    assert.equal(hungry.targetFood, food[1], '应该改吃第二颗，而不是挤同一颗');
+});
+
 test('吃人收益倍率：AI 的 eatBonus 让互吃长得更明显', () => {
     const predator = new AiPlayer(500, 500, 20, '#fff', 'ai');
     predator.eatBonus = 1;

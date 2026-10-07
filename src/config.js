@@ -119,6 +119,10 @@ export const AI = {
     fleeRange: 160,
     // 没有目标时的随机游走间隔（秒）
     wanderInterval: 1.2,
+    // 与其他 AI 的避让：小于「双方半径 + avoidGap」时按接近程度推开。
+    // 之前只有逃跑模式会算"别撞球"，觅食/追击完全不避让 → 一堆 AI 走同一条线。
+    avoidGap: 55,
+    avoidWeight: 1.2,
     // 距世界边界该值以内开始往回躲
     borderMargin: 130,
 };
