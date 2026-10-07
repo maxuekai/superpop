@@ -1,4 +1,4 @@
-import { EAT, FOOD, PLAYER } from '../config.js';
+import { EAT, FOOD, PLAYER, SPLIT } from '../config.js';
 import { distance, shadeColor } from './utils.js';
 
 // 所有小球（玩家和 AI）的共同基类：移动、边界钳制、视觉回弹、进食与互吃判定、绘制。
@@ -33,6 +33,12 @@ export class Ball {
         this.shielded = false;
         // 分裂相关：所属细胞组的合并冷却（世界时间，秒）
         this.mergeAfter = 0;
+        // 分裂瞬间「朝外弹开」的速度（世界单位/秒）与剩余时间（秒）。
+        // 分裂后两半朝同一方向以同一速度走，距离会永远停在初始间距上——
+        // 没有这段外冲，看起来就像球"变胖"而不是"裂开"（见 config.js SPLIT.pushSpeed）
+        this.splitVx = 0;
+        this.splitVy = 0;
+        this.pushLeft = 0;
     }
 
     static nextOwnerId() {
@@ -61,6 +67,10 @@ export class Ball {
         // 保护由 Game 在重生后重新发放，这里先清干净
         this.shieldUntil = 0;
         this.shielded = false;
+        // 弹开速度也一起清掉，否则重生后会带着上一次分裂的余速漂移
+        this.splitVx = 0;
+        this.splitVy = 0;
+        this.pushLeft = 0;
     }
 
     // 出生保护是否生效
@@ -81,6 +91,19 @@ export class Ball {
         const divisor = PLAYER.speedDivisor + Math.max(0, this.r - PLAYER.radius) * PLAYER.slowdownPerRadius;
         this.x += (this.speedX / divisor) * step;
         this.y += (this.speedY / divisor) * step;
+
+        // 分裂外冲：按剩余时间线性衰减到 0。
+        // 必须乘 dt 而不是 step：这段位移是"世界单位/秒"，不参与速度分母与体型缩放。
+        if (this.pushLeft > 0) {
+            const falloff = this.pushLeft / SPLIT.pushTime;
+            this.x += this.splitVx * dt * falloff;
+            this.y += this.splitVy * dt * falloff;
+            this.pushLeft = Math.max(0, this.pushLeft - dt);
+            if (this.pushLeft === 0) {
+                this.splitVx = 0;
+                this.splitVy = 0;
+            }
+        }
 
         // 视觉半径弹簧跟随实际半径：自然过冲回弹，比直接跳变顺滑
         this.rVel = (this.rVel + (this.r - this.displayR) * PLAYER.springStiffness) * PLAYER.springDamping;

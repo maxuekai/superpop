@@ -155,6 +155,11 @@ export function canSplit(cells, now, lastSplitAt) {
 }
 
 // 分裂：把所有够大的细胞一切两半，朝当前移动方向的垂直方向分开（避免挡住去路）。
+// 几何要点（改这三个数前先看 config.js 里的注释，值都是实测出来的）：
+//   · 分开方向 = 移动方向的垂直方向，因此"边跑边分"会把两个半球甩到身侧；
+//   · 初始中心距 = 2 × SPLIT.separation × 切完后的半径，必须大于 mergeFactor 判定的
+//     合并阈值，否则 mergeCooldown 一到两半就粘回去，玩家看到的是"按了没反应"；
+//   · 另外给两半一个朝外、线性衰减的速度（splitVx/splitVy），让"裂开"这个动作看得见。
 // makeCell(x, y, r, from) 由调用方提供（Player 实例 / 随机颜色）。
 // 返回新的细胞数组（原数组不动，方便测试与回滚）。
 export function splitCells(cells, dirX, dirY, makeCell) {
@@ -174,16 +179,34 @@ export function splitCells(cells, dirX, dirY, makeCell) {
         // 原来的球自己变成一半（保持对象引用：镜头/重生逻辑都指着它），
         // 另一半是新球；两半各得一半质量，总量守恒。
         const half = Math.sqrt(cell.mass / 2);
-        const gap = cell.r * 0.35;
+        // 间距按「切完之后的半径」算，不是按原半径——按原半径算会小一半以上
+        const gap = half * SPLIT.separation;
+        // 弹开速度按体型的平方根缩放：纯线性会让大球的分裂在屏幕上占掉近两成，
+        // 平方根则接近"屏幕上看起来每次差不多"（相机视野本身按 (r/初始r)^0.35 缩放）。
+        const push = SPLIT.pushSpeed * Math.sqrt(half / PLAYER.radius);
+        const pushX = px * push;
+        const pushY = py * push;
         const originX = cell.x;
         const originY = cell.y;
         cell.r = half;
         cell.x = originX - px * gap;
         cell.y = originY - py * gap;
+        // 两半朝相反方向弹开（原来写成同一个方向，等于整体平移，白加）
+        applySplitPush(cell, -pushX, -pushY);
         out.push(cell);
-        out.push(makeCell(originX + px * gap, originY + py * gap, half, cell));
+        const other = makeCell(originX + px * gap, originY + py * gap, half, cell);
+        applySplitPush(other, pushX, pushY);
+        out.push(other);
     }
     return out;
+}
+
+// 写入「朝外弹开」的速度，由 Ball.update 逐帧衰减（core/ 不能假设调用方是 Ball 类）
+export function applySplitPush(cell, pushX, pushY) {
+    cell.splitVx = pushX;
+    cell.splitVy = pushY;
+    cell.pushLeft = SPLIT.pushTime;
+    return cell;
 }
 
 // 合并：同一 owner 的两个细胞靠得太近、且过了合并冷却，就并回一个（质量相加）。

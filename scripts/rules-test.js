@@ -617,6 +617,97 @@ test('分裂：同一 owner 的分身之间不能互吃', () => {
     assert.equal(victims.length, 0);
 });
 
+test('分裂：两半初始距离够远，不叠在一起、也不会自动粘回', () => {
+    // 真机反馈："分裂也没有分裂多远，还是很近" —— 原来 gap 按【原半径】算，
+    // 切完的两半中心距只有半径和的一半，视觉上直接重叠，而且小于合并阈值，
+    // mergeCooldown 一到就被吸回一个球。
+    const r = SPLIT.minCellRadius;
+    const big = makeCell(500, 500, r, 'me');
+    const cells = splitCells([big], 70, 0, (x, y, rr) => makeCell(x, y, rr, 'me'));
+    const [origin, other] = cells;
+    const gap = Math.hypot(other.x - origin.x, other.y - origin.y);
+    const sumR = origin.r + other.r;
+    assert.ok(gap > sumR, `两半不能重叠：中心距 ${gap.toFixed(1)} 应大于半径和 ${sumR.toFixed(1)}`);
+    // 初始距离必须已经超过合并阈值，否则冷却一过就粘回去（= "按了没反应"）
+    const mergeAt = sumR * SPLIT.mergeFactor;
+    assert.ok(gap > mergeAt, `不该自动粘回：中心距 ${gap.toFixed(1)} 应大于合并阈值 ${mergeAt.toFixed(1)}`);
+});
+
+test('分裂：切开会朝外弹一下再停下（看得见"裂开"而不是"变胖"）', () => {
+    const big = ball(500, 500, 30, 'me');
+    const cells = splitCells([big], 0, 70, (x, y, r) => ball(x, y, r, 'me'));
+    for (const cell of cells) {
+        assert.ok(cell.pushLeft > 0, '两半都该带一段外冲速度');
+    }
+    // 朝下走 → 分开方向是水平（x 轴） → 外冲也应该是 ±x
+    const [origin, other] = cells;
+    assert.ok(origin.splitVx * other.splitVx < 0, '两半朝相反方向弹开');
+    assert.ok(Math.abs(origin.splitVx) > 1, '外冲速度不能是 0');
+    assert.ok(Math.abs(origin.splitVy) < 1e-6, '外冲垂直于移动方向');
+
+    // 弹到一半距离应该明显拉开，衰减完后不再移动
+    const distAt = (seconds) => {
+        const [a, b] = cells;
+        const ax = a.x;
+        const bx = b.x;
+        for (let i = 0; i < Math.round(seconds / STEP); i += 1) {
+            a.update(STEP, WORLD);
+            b.update(STEP, WORLD);
+        }
+        return { before: Math.abs(bx - ax), after: Math.abs(b.x - a.x), a, b };
+    };
+    const mid = distAt(SPLIT.pushTime / 2);
+    assert.ok(mid.after > mid.before * 1.1, '外冲期间两半应该继续拉开');
+
+    // 跑完 pushTime + 余量，速度归零、位置不再变化
+    const a = cells[0];
+    const b = cells[1];
+    for (let i = 0; i < 60; i += 1) {
+        a.update(STEP, WORLD);
+        b.update(STEP, WORLD);
+    }
+    const frozenX = a.x;
+    const frozenB = b.x;
+    for (let i = 0; i < 30; i += 1) {
+        a.update(STEP, WORLD);
+        b.update(STEP, WORLD);
+    }
+    assert.equal(a.splitVx, 0, '外冲应当衰减到 0，不能留下永久漂移');
+    assert.equal(a.x, frozenX, '外冲结束后两半不该继续自己分开');
+    assert.equal(b.x, frozenB);
+});
+
+test('分裂：外冲结束后两半并行保持间距（不会一路拉到天边）', () => {
+    const big = ball(500, 500, 30, 'me');
+    // 朝右走 → 分开方向是垂直方向（y 轴），所以间距要看 y 差
+    const cells = splitCells([big], 70, 0, (x, y, r) => ball(x, y, r, 'me'));
+    for (const cell of cells) {
+        cell.speedX = 70;
+        cell.speedY = 0;
+    }
+    const gapNow = () => Math.abs(cells[1].y - cells[0].y);
+    const startDist = gapNow();
+    assert.ok(startDist > cells[0].r * 2, `初始就要分开：${startDist.toFixed(1)}`);
+
+    // 跑完整个外冲窗口
+    for (let i = 0; i < Math.round(SPLIT.pushTime / STEP) + 10; i += 1) {
+        for (const cell of cells) {
+            cell.update(STEP, WORLD);
+        }
+    }
+    const afterPush = gapNow();
+    assert.ok(afterPush > startDist * 1.5, `外冲应当把两半明显拉开：${startDist.toFixed(1)} → ${afterPush.toFixed(1)}`);
+
+    // 再跑 5 秒：外冲已经衰减完，距离必须停住
+    for (let i = 0; i < 300; i += 1) {
+        for (const cell of cells) {
+            cell.update(STEP, WORLD);
+        }
+    }
+    assert.ok(Math.abs(gapNow() - afterPush) < 0.01, `并行后距离应稳定：${afterPush.toFixed(1)} → ${gapNow().toFixed(1)}`);
+    assert.ok(cells[0].x > 500 && cells[1].x > 500, '两半都朝前进方向移动');
+});
+
 test('分裂：不同 owner 仍然照常互吃（AI 之间不受影响）', () => {
     const playerCell = makeCell(500, 500, 30, 'me');
     const aiBall = ball(500, 500, 10, 'ai');
@@ -753,6 +844,30 @@ test('摇杆：多指只认第一根，后来的手指不抢控', () => {
     // 第一根抬起才停（抬起第二根不停）
     doc.fire('touchend', touchEvent('touchend', 2, 100, 100));
     assert.equal(joystick.isActive, true, '抬起非操控手指不该停止');
+});
+
+test('摇杆：操控中，第二根手指的 touchmove 不被摇杆拦（否则移动中点不到分裂）', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { doc } = fakeJoystick(input);
+    // 第一根手指在画布上开始操控
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchmove', touchEvent('touchmove', 1, 340, 400));
+    assert.ok(input.speedX > 0, '第一根手指正在操控');
+
+    // 第二根手指按在右下角分裂按钮上并轻微滑动：
+    // touches 里两根都在（第一根还按着），但 changedTouches 只有第二根。
+    const finger2 = { identifier: 2, clientX: 360, clientY: 620 };
+    const move = {
+        type: 'touchmove',
+        target: null,
+        changedTouches: [finger2],
+        touches: [finger2, { identifier: 1, clientX: 340, clientY: 400 }],
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+    };
+    doc.fire('touchmove', move);
+    assert.equal(move.defaultPrevented, false, '第二根手指不能被摇杆 preventDefault，否则按钮点不动');
+    assert.ok(input.speedX > 0, '第一根手指仍然正常操控');
 });
 
 test('摇杆：界面元素上的触摸不接管、不 preventDefault（否则按钮点不动）', () => {

@@ -69,12 +69,17 @@ export class Joystick {
                 if (this.touchId === null) {
                     return;
                 }
-                e.preventDefault();
+                // 判据是 changedTouches（本次真正移动了哪几根手指），不是 touches（当前按着的全部手指）：
+                // 玩家一根手指拖着球走、第二根去按分裂按钮时，第二根的 touchmove 里
+                // changedTouches 只有它自己，这里就直接返回、不 preventDefault，
+                // 按钮的兼容性 click 才不会被吞掉（真机反馈："没法同时移动的时候按分裂"）。
+                // 之前是无条件 preventDefault —— 只要第一根手指还按着，第二根在按钮上的滑动就被摇杆吃掉。
                 {
-                    const touch = this.findTouch(event.touches, this.touchId);
+                    const touch = this.findTouch(event.changedTouches, this.touchId);
                     if (!touch) {
                         return;
                     }
+                    e.preventDefault();
                     // 手指相对按下原点的位置
                     const tempX = touch.clientX - this.originX;
                     const tempY = touch.clientY - this.originY;

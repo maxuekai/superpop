@@ -86,6 +86,8 @@ export class Hud {
     // 分裂按钮的可用态与冷却文案。
     // 只有「真能分裂」时才显示可点状态——以前这个按钮一直摆在那儿，
     // 玩家按了没反应又容易误触，才被移除；现在长到阈值才亮。
+    // 冷却期间必须真的 disabled：只改样式的话按钮照样能点，点下去 requestSplit
+    // 直接 return false，玩家只会看到"按了没反应"，分不清是冷却还是没到门槛。
     updateSplit(state) {
         if (!this.splitBtn) {
             return;
@@ -94,6 +96,7 @@ export class Hud {
         this.splitBtn.classList.toggle('ready', state.canSplit);
         this.splitBtn.classList.toggle('cooling', !state.canSplit && cooling);
         this.splitBtn.classList.toggle('hidden', !state.canSplit && !cooling);
+        this.splitBtn.disabled = !state.canSplit;
         if (this.splitLabel) {
             const label = state.canSplit ? '分裂' : `${Math.ceil(state.cooldownLeft)}s`;
             if (label !== this.lastSplitLabel) {
