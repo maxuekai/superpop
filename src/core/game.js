@@ -17,6 +17,7 @@ import {
     rankOfGroup,
     resolveEatings,
     resolveFoodEating,
+    resolveOverlaps,
     splitCells,
     targetAiCount,
 } from './rules.js';
@@ -359,6 +360,7 @@ export class Game {
 
         this.eatFood();
         this.eatBalls();
+        this.separateBalls();
         this.mergePlayerCells();
 
         this.updateRespawn();
@@ -367,6 +369,11 @@ export class Game {
             this.syncTimer = AI.syncInterval;
             this.syncAiCount();
         }
+    }
+
+    // 软碰撞：吃不掉彼此的球互相挤开，避免视觉穿模（"AI 直接撞到我却没反应"）
+    separateBalls() {
+        resolveOverlaps(this.balls);
     }
 
     // 分身靠拢到一定距离后自动合并回一个

@@ -211,6 +211,49 @@ export function mergeCells(cells, now) {
     return { cells: out, merged };
 }
 
+// 软碰撞：吃不掉彼此却已经重叠的球互推开（各退一半，推到刚好接触）。
+// 不做这一步，大小相近的球会直接穿模叠在一起，AI 直冲过来看起来就像"撞到玩家"
+// 却毫无效果；有了它，撞人只会把两球挤开——人类玩家也是同样的待遇。
+// 同一 owner 的分身不走这里（它们靠 mergeCells 合并）。
+// 调用前应先跑 resolveEatings：能吃的已经在那一帧死了，剩下需要推的都是吃不掉的关系。
+export function resolveOverlaps(balls) {
+    const pushed = [];
+    for (let i = 0; i < balls.length; i += 1) {
+        const a = balls[i];
+        if (!a.alive) {
+            continue;
+        }
+        for (let j = i + 1; j < balls.length; j += 1) {
+            const b = balls[j];
+            if (!b.alive || b.ownerId === a.ownerId) {
+                continue;
+            }
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            const minGap = a.r + b.r;
+            if (d >= minGap) {
+                continue;
+            }
+            if (d <= 0.001) {
+                // 圆心重合：按名字给一个固定方向，避免除零
+                a.x -= a.r;
+                b.x += b.r;
+            } else {
+                const push = (minGap - d) / 2;
+                const ux = dx / d;
+                const uy = dy / d;
+                a.x -= ux * push;
+                a.y -= uy * push;
+                b.x += ux * push;
+                b.y += uy * push;
+            }
+            pushed.push(a, b);
+        }
+    }
+    return pushed;
+}
+
 // ---------- 出生点 ----------
 // 取一个当前没人用的昵称：AI 数量可能接近名字数量，纯随机抽必然出现两个「芋圆」，
 // 玩家分不清谁是谁。名字全被占满时才退回随机。

@@ -20,6 +20,7 @@ import {
     rankOfGroup,
     resolveEatings,
     resolveFoodEating,
+    resolveOverlaps,
     splitCells,
     targetAiCount,
 } from '../src/core/rules.js';
@@ -872,6 +873,36 @@ test('AI 不抢别人已经盯上的目标', () => {
     assert.equal(other.targetFood, food[0], 'other 应盯上离自己更近的 A');
     hungry.think([hungry, other], food);
     assert.equal(hungry.targetFood, food[1], '应该改吃第二颗，而不是挤同一颗');
+});
+
+test('软碰撞：吃不掉彼此的球被挤开，不该穿模叠在一起', () => {
+    const a = ball(500, 500, 10, 'a');
+    const b = ball(510, 500, 10, 'b'); // 相距 10 < 20，明显重叠
+    const before = distance2(a.x - b.x, a.y - b.y);
+    assert.ok(before < a.r + b.r, '前置条件：确实重叠');
+    resolveOverlaps([a, b]);
+    const after = distance2(a.x - b.x, a.y - b.y);
+    assert.ok(Math.abs(after - (a.r + b.r)) < 1e-9, `应该刚好推开到接触，实际 ${after.toFixed(2)}`);
+    // 各退一半，质量总和不变（只是位置变了）
+    assert.ok(Math.abs((a.x - 500) + (b.x - 510)) < 1e-9);
+});
+
+test('软碰撞：同一 owner 的分身不被推开（它们要合并而不是互推）', () => {
+    const a = new Player('me');
+    const b = new Player('me2');
+    a.x = 500; a.y = 500; a.r = 10;
+    b.x = 505; b.y = 500; b.r = 10;
+    assert.equal(b.ownerId, a.ownerId);
+    resolveOverlaps([a, b]);
+    assert.equal(b.x, 505, '同族分身位置不应被软碰撞改动');
+});
+
+test('软碰撞：不重叠的球不动', () => {
+    const a = ball(500, 500, 10, 'a');
+    const b = ball(560, 500, 10, 'b');
+    resolveOverlaps([a, b]);
+    assert.equal(a.x, 500);
+    assert.equal(b.x, 560);
 });
 
 test('吃人收益倍率：AI 的 eatBonus 让互吃长得更明显', () => {
