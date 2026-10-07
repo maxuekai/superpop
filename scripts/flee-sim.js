@@ -11,6 +11,7 @@
 import { AI, JOYSTICK, PLAYER } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
+import { resolveOverlaps } from '../src/core/rules.js';
 import { distance } from '../src/core/utils.js';
 
 const STEP = 1 / 60;
@@ -121,6 +122,11 @@ function runOnce(seedIndex, hunterR) {
         }
 
         const gap = distance(hunter.x, hunter.y, victim.x, victim.y);
+        // 必须与 Game.updateWorld 同序：吃 → 弹开。
+        // 这里曾经漏了软碰撞，于是"猎手能不能吃到猎物"是在一个没有碰撞的世界里测出来的，
+        // 真实游戏里软碰撞会把猎物锁死在半径和上、谁都吃不掉谁，仿真却报"17/20 被吃"。
+        // 漏掉任何一步都会让仿真与真实手感脱节，改这里前先对照 Game.updateWorld。
+        resolveOverlaps([hunter, victim]);
         if (gap < THREAT_RANGE) {
             threatenedFrames += 1;
             const clearance = Math.min(

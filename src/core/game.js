@@ -373,7 +373,7 @@ export class Game {
 
     // 软碰撞：吃不掉彼此的球互相挤开，避免视觉穿模（"AI 直接撞到我却没反应"）
     separateBalls() {
-        resolveOverlaps(this.balls);
+        resolveOverlaps(this.balls, this.time);
     }
 
     // 分身靠拢到一定距离后自动合并回一个

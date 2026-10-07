@@ -235,11 +235,22 @@ export function mergeCells(cells, now) {
 }
 
 // 软碰撞：吃不掉彼此却已经重叠的球互推开（各退一半，推到刚好接触）。
-// 不做这一步，大小相近的球会直接穿模叠在一起，AI 直冲过来看起来就像"撞到玩家"
-// 却毫无效果；有了它，撞人只会把两球挤开——人类玩家也是同样的待遇。
+// 不做这一步，大小相近的球会直接穿模叠在一起；有了它，撞人只会把两球挤开。
 // 同一 owner 的分身不走这里（它们靠 mergeCells 合并）。
 // 调用前应先跑 resolveEatings：能吃的已经在那一帧死了，剩下需要推的都是吃不掉的关系。
-export function resolveOverlaps(balls) {
+//
+// ⚠ 关键：**尺寸上能吃对方的那一对绝对不能推**。
+// 吃人的条件是「对方圆心进入自己体内」（中心距 ≤ 吃者半径），而弹开会把中心距
+// 精确复位到「两半径之和」——半径和恒大于吃者半径，于是猎物永远够不到那个阈值。
+// 实测：r=30 追 r=10，两球被锁死在 40，吃人阈值 30，30 秒满舵冲撞也进不去，
+// 谁都吃不掉谁（真机反馈："撞比我大的球，我都没死，互相卡住进不去"）。
+// 所以这里用 outweighs（只看尺寸）而不是 canEatBall（还要看当前距离，此时必然为 false）。
+// 这一对本来就该在下一次 resolveEatings 里判定吃掉，不该被弹开拦下。
+//
+// 唯一的例外是**被保护的一方**：保护期内 resolveEatings 不会吃掉它，但弹开仍要照常发生，
+// 否则它会整个"嵌"在大球里（视觉上像卡住），保护一到期立刻被吃——重生撞上大球就会这样。
+// now 缺省为 0，对应"不在保护期"，方便只测推开的调用方。
+export function resolveOverlaps(balls, now = 0) {
     const pushed = [];
     for (let i = 0; i < balls.length; i += 1) {
         const a = balls[i];
@@ -250,6 +261,11 @@ export function resolveOverlaps(balls) {
             const b = balls[j];
             if (!b.alive || b.ownerId === a.ownerId) {
                 continue;
+            }
+            // 这一对里谁吃谁（都吃不掉时为 null）
+            const prey = a.outweighs(b) ? b : (b.outweighs(a) ? a : null);
+            if (prey && !prey.isProtected(now)) {
+                continue; // 吃得到、且猎物没在保护期 → 放行重叠，让它被吃掉
             }
             const dx = b.x - a.x;
             const dy = b.y - a.y;
