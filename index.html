@@ -19,6 +19,10 @@
         <div class="control-panel">
             <i class="direction-control"></i>
         </div>
+        <!-- 分裂按钮：只有长到能分裂时才出现（以前一直摆着导致玩家误按才被移除的） -->
+        <button class="division ui-interactive hidden" type="button">
+            <span class="division-label">分裂</span>
+        </button>
         <canvas id="ball" width="667" height="375"></canvas>
 
         <!-- 开局界面：ui-interactive 让摇杆不抢这些触摸 -->

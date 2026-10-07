@@ -121,6 +121,38 @@ body {
     margin-top: -22px;
 }
 
+/* 分裂按钮：放在右下角，够大但离摇杆区远一点；平时隐藏（长到阈值才出现） */
+.division {
+    width: 76px;
+    height: 76px;
+    border: none;
+    border-radius: 50%;
+
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    color: #06231f;
+    background-color: rgba(110, 231, 195, 0.9);
+
+    position: fixed;
+    right: 20px;
+    bottom: 28px;
+    z-index: 2;
+}
+
+.division.cooling {
+    color: #cfe9e2;
+    background-color: rgba(255, 255, 255, 0.16);
+}
+
+.division.hidden {
+    display: none;
+}
+
+.division:active {
+    transform: scale(0.94);
+}
+
 /* 开局 / 结算弹层：盖住全屏，游戏逻辑此时是暂停的 */
 .overlay {
     display: flex;

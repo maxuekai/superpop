@@ -1,17 +1,21 @@
-import { AI, COLORS, FOOD, NAMES, PLAYER, SPAWN, TICK, VIEW, WORLD } from '../config.js';
+import { AI, COLORS, FOOD, NAMES, PLAYER, PLAYER_OWNER, SPAWN, SPLIT, TICK, VIEW, WORLD } from '../config.js';
 import { AiPlayer } from './ai.js';
 import { Camera } from './camera.js';
 // 改名导入：原本叫 Map 的话，本文件里就不能再用全局的 Map（会遮蔽）
 import { Map as GameMap } from './map.js';
 import { Player } from './player.js';
 import {
+    canSplit,
     dueRespawns,
     excessToRemove,
+    groupMass,
     isSpawnClear,
     leaderboardEntries,
-    rankOf,
+    mergeCells,
+    rankOfGroup,
     resolveEatings,
     resolveFoodEating,
+    splitCells,
     targetAiCount,
 } from './rules.js';
 import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem } from './utils.js';
@@ -31,8 +35,10 @@ export class Game {
         this.foodEaten = 0; // 本局吃掉的食物数
         this.kills = 0; // 本局吃掉的其他球数
 
-        // 玩家 + 全部 AI（含已死等待重生的），碰撞检测遍历这一份
+        // 玩家 + 全部 AI（含已死等待重生的）+ 玩家的每一个分身，碰撞检测遍历这一份
         this.player = new Player();
+        this.playerCells = [this.player];
+        this.playerName = this.player.name;
         this.ai = [];
         this.balls = [this.player];
 
@@ -52,9 +58,14 @@ export class Game {
         this.accumulator = 0;
         this.lastTime = 0;
         this.syncTimer = 0;
+        this.lastSplitAt = -Infinity;
+
+        // 输入层：摇杆/键盘写这里，再同步给每一个玩家分身
+        // （分身不是一个球，共享同一个方向；不共用对象的话输入只会作用在其中一个上）
+        this.input = { speedX: 0, speedY: 0 };
 
         this.camera = new Camera(0, 0, 0, 0, this.world.width, this.world.height);
-        this.camera.follow(this.player);
+        this.camera.follow(this.largestCell());
 
         this.resize = this.resize.bind(this);
         this.loop = this.loop.bind(this);
@@ -64,6 +75,58 @@ export class Game {
         // 开局按「当前体型对应的目标数量」放 AI，而不是一把放满 AI.count：
         // 目标数量会随玩家体型从 minCount 涨到 count，开局满屏对手容易被围
         this.spawnAi(this.targetAiCount());
+        this.camera.follow(this.largestCell());
+    }
+
+    // ---------- 玩家分身 ----------
+
+    // 最大的存活分身：镜头、视野缩放都用它（最稳，不会因为分身分散而乱跳）
+    largestCell() {
+        let best = null;
+        for (const cell of this.playerCells) {
+            if (cell.alive && (best === null || cell.r > best.r)) {
+                best = cell;
+            }
+        }
+        return best || this.playerCells[0] || this.player;
+    }
+
+    // 玩家整组质量（体重面板/排行榜口径）
+    playerMass() {
+        return groupMass(this.playerCells);
+    }
+
+    // 分身增减后要重建碰撞列表（数量很少，直接重算最不容易出错）
+    rebuildBalls() {
+        this.balls = [...this.playerCells.filter((cell) => cell.alive), ...this.ai];
+    }
+
+    // 分裂状态：给 HUD（按钮是否可点、冷却还剩几秒）
+    splitState() {
+        const can = this.state === 'playing' && canSplit(this.playerCells, this.time, this.lastSplitAt);
+        return { canSplit: can, cooldownLeft: Math.max(0, SPLIT.cooldown - (this.time - this.lastSplitAt)) };
+    }
+
+    requestSplit() {
+        if (!this.splitState().canSplit) {
+            return false;
+        }
+        const { speedX, speedY } = this.input;
+        this.playerCells = splitCells(this.playerCells, speedX, speedY, (x, y, r, from) => {
+            const cell = new Player(this.playerName);
+            cell.x = x;
+            cell.y = y;
+            cell.r = r;
+            cell.bColor = from.bColor;
+            cell.mergeAfter = this.time + SPLIT.mergeCooldown;
+            return cell;
+        });
+        this.lastSplitAt = this.time;
+        for (const cell of this.playerCells) {
+            cell.mergeAfter = this.time + SPLIT.mergeCooldown;
+        }
+        this.rebuildBalls();
+        return true;
     }
 
     // ---------- 出生与生成 ----------
@@ -117,10 +180,10 @@ export class Game {
         };
     }
 
-    // AI 出生半径：跟着玩家体型取样，既不会全顶在上限，也不会开局全是大佬
+    // AI 出生半径：跟着玩家体型取样（用整组里最大的分身，否则分裂后会被低估）
     aiSpawnRadius(ratio) {
         const min = PLAYER.radius * AI.spawnRadiusMin;
-        const max = Math.max(min, Math.min(PLAYER.radius * AI.spawnRadiusMax, this.player.r * ratio));
+        const max = Math.max(min, Math.min(PLAYER.radius * AI.spawnRadiusMax, this.largestCell().r * ratio));
         return randomFloat(min, max);
     }
 
@@ -137,7 +200,7 @@ export class Game {
 
     // AI 数量随玩家体型动态调整：玩家越大场上对手越多，但不超过 AI.count（公式见 rules.js）
     targetAiCount() {
-        return targetAiCount(this.player.r);
+        return targetAiCount(this.largestCell().r);
     }
 
     syncAiCount() {
@@ -184,22 +247,30 @@ export class Game {
         const pos = this.safeSpawnPosition(PLAYER.radius);
         this.player.reset(pos.x, pos.y, PLAYER.radius, randomItem(COLORS));
         if (name) {
-            this.player.name = name;
+            this.playerName = name;
         }
+        this.player.name = this.playerName;
+        // 重生回到单个细胞；质量、分身、冷却全部重置
+        this.playerCells = [this.player];
+        this.lastSplitAt = -Infinity;
+        this.input.speedX = 0;
+        this.input.speedY = 0;
         this.playTime = 0;
         this.foodEaten = 0;
         this.kills = 0;
+        this.rebuildBalls();
     }
 
     // 从开局界面进入游戏
     begin(name) {
         if (name) {
+            this.playerName = name;
             this.player.name = name;
         }
         this.state = 'playing';
         // 保护从真正开局那一刻开始算（菜单界面里世界时间也在走，不能在构造时发）
         this.player.grantShield(PLAYER.spawnShield, this.time);
-        this.camera.snapTo(this.player);
+        this.camera.snapTo(this.largestCell());
         this.hud.hideStart();
     }
 
@@ -208,33 +279,28 @@ export class Game {
         this.resetPlayer(name);
         this.state = 'playing';
         this.player.grantShield(PLAYER.spawnShield, this.time);
-        this.camera.snapTo(this.player);
+        this.camera.snapTo(this.largestCell());
         this.hud.hideSettlement();
     }
 
+    // 整组玩家细胞都被吃光才算死
     onPlayerEaten() {
-        this.player.alive = false;
-        this.player.speedX = 0;
-        this.player.speedY = 0;
+        this.input.speedX = 0;
+        this.input.speedY = 0;
         this.state = 'dead';
         this.hud.showSettlement({
-            weight: Math.round(this.player.mass),
-            rank: this.rankOf(this.player),
+            weight: Math.round(this.playerMass()),
+            rank: rankOfGroup(this.playerCells, this.ai),
             time: this.playTime,
             food: this.foodEaten,
             kills: this.kills,
-            name: this.player.name,
+            name: this.playerName,
         });
     }
 
-    // 玩家当前名次（存活的球里比它重的数量 + 1）
-    rankOf(ball) {
-        return rankOf(ball, this.balls);
-    }
-
-    // 排行榜数据（体重降序，取前 N）
+    // 排行榜数据（玩家按整组质量算一条）
     leaderboard() {
-        return leaderboardEntries(this.balls, this.player);
+        return leaderboardEntries(this.playerCells, this.ai);
     }
 
     // ---------- 逻辑更新 ----------
@@ -249,13 +315,23 @@ export class Game {
             ball.shielded = ball.alive && ball.isProtected(this.time);
         }
         this.updateViewScale();
+        this.camera.follow(this.largestCell());
         this.camera.update();
         this.hud.update(dt, this);
     }
 
     updateWorld(dt) {
         this.playTime += dt;
-        this.player.update(dt, this.world);
+
+        // 输入同步到每一个分身：它们共享同一个方向，各自按自己的体积算速度
+        for (const cell of this.playerCells) {
+            if (!cell.alive) {
+                continue;
+            }
+            cell.speedX = this.input.speedX;
+            cell.speedY = this.input.speedY;
+            cell.update(dt, this.world);
+        }
         for (const ai of this.ai) {
             if (ai.alive) {
                 ai.update(dt, this.world, this.balls, this.foodList);
@@ -264,6 +340,7 @@ export class Game {
 
         this.eatFood();
         this.eatBalls();
+        this.mergePlayerCells();
 
         this.updateRespawn();
         this.syncTimer -= dt;
@@ -273,23 +350,41 @@ export class Game {
         }
     }
 
+    // 分身靠拢到一定距离后自动合并回一个
+    mergePlayerCells() {
+        const result = mergeCells(this.playerCells, this.time);
+        if (result.merged > 0) {
+            this.playerCells = result.cells;
+            this.rebuildBalls();
+        }
+    }
+
     // 吃食物：任何球吃到都立刻在别处补一颗（判定在 rules.resolveFoodEating）
     eatFood() {
         const result = resolveFoodEating(this.foodList, this.balls, () => this.spawnFood());
         this.foodList = result.foodList;
-        this.foodEaten += result.eaten.get(this.player) || 0;
+        for (const cell of this.playerCells) {
+            this.foodEaten += result.eaten.get(cell) || 0;
+        }
     }
 
     // 互吃：大的吃小的（判定在 rules.resolveEatings），这里只安排死亡结算与重生
     eatBalls() {
         const { victims, eaten } = resolveEatings(this.balls, this.time);
-        this.kills += eaten.get(this.player) || 0;
+        for (const cell of this.playerCells) {
+            this.kills += eaten.get(cell) || 0;
+        }
         for (const victim of victims) {
-            if (victim === this.player) {
-                this.onPlayerEaten();
-            } else {
-                victim.respawnAt = this.time + AI.respawnDelay;
+            if (victim.ownerId === PLAYER_OWNER) {
+                // 分身被吃掉只是损失那份质量；全都吃光才结算死亡
+                this.playerCells = this.playerCells.filter((cell) => cell !== victim);
+                continue;
             }
+            victim.respawnAt = this.time + AI.respawnDelay;
+        }
+        this.rebuildBalls();
+        if (this.state === 'playing' && this.playerCells.length === 0) {
+            this.onPlayerEaten();
         }
     }
 
@@ -309,8 +404,9 @@ export class Game {
     }
 
     // 视野缩放：屏幕长边锚定 VIEW.longEdgeWorld 个世界单位，并随体型放大视距
+    // 体型口径取「最大的分身」：分身分散时视野不会来回跳
     updateViewScale() {
-        const sizeZoom = Math.pow(this.player.r / PLAYER.radius, VIEW.zoomExponent);
+        const sizeZoom = Math.pow(this.largestCell().r / PLAYER.radius, VIEW.zoomExponent);
         this.scale = Math.max(
             this.fitScale,
             Math.max(this.cssWidth, this.cssHeight) / (VIEW.longEdgeWorld * sizeZoom),
@@ -371,14 +467,16 @@ export class Game {
         // 食物（按视口裁剪 + 按颜色合批）
         this.drawFood(context);
 
-        // 球：先画活着的 AI 再画玩家，保证玩家始终在最上层
-        for (const ball of this.balls) {
-            if (ball.alive && ball !== this.player) {
-                ball.draw(context);
+        // 球：先画 AI 再画玩家分身，保证玩家始终在最上层
+        for (const ai of this.ai) {
+            if (ai.alive) {
+                ai.draw(context);
             }
         }
-        if (this.player.alive) {
-            this.player.draw(context);
+        for (const cell of this.playerCells) {
+            if (cell.alive) {
+                cell.draw(context);
+            }
         }
 
         context.restore();
@@ -412,7 +510,7 @@ export class Game {
 
     start() {
         this.lastTime = performance.now();
-        this.hud.updateWeight(this.player);
+        this.hud.updateWeight(this.playerMass());
         window.requestAnimationFrame(this.loop);
     }
 }

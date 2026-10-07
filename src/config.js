@@ -21,6 +21,21 @@ export const FOOD = {
     clusterRadius: 46,
 };
 
+// 分裂：一个球可以切成多个「细胞」，同属一个 owner。
+// 质量守恒（分裂只是把质量对半分，不凭空产生），同一 owner 的细胞之间不能互吃；
+// 冷却结束前不能再分，细胞靠拢到一定距离会自动合并回去。
+export const SPLIT = {
+    // 半径小于这个值的细胞不能再分（避免切出一堆小渣）
+    minCellRadius: 16,
+    cooldown: 8, // 两次分裂之间的间隔（秒）
+    mergeCooldown: 3, // 分裂后多久才允许重新合并（秒），防止切完立刻粘回去
+    mergeFactor: 0.9, // 两细胞中心距 < (r1+r2) × 该值时合并
+    maxCells: 8, // 场上最多同时存在多少个自己的细胞
+};
+
+// 键盘/按钮都能触发的动作键
+export const ACTIONS = { split: ['Space'] };
+
 // 玩家与 AI 共用的移动/成长参数（Ball 基类统一读取）
 export const PLAYER = {
     radius: 10,
@@ -120,6 +135,9 @@ export const KEYS = {
     // 输入框/弹层里打字时不响应按键
     ignoreTarget: 'input, textarea, .ui-interactive',
 };
+
+// 玩家所属分组 id：同一 owner 的细胞之间不能互吃，排行榜按整组合计质量
+export const PLAYER_OWNER = 'player';
 
 // 出生点：距世界边缘至少留这么远，保证相机能把球放在屏幕中间
 export const SPAWN = { edgeGap: 90 };

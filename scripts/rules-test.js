@@ -2,20 +2,26 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, PLAYER } from '../src/config.js';
+import { AI, EAT, FOOD, JOYSTICK, PLAYER, SPLIT } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
+import { Player } from '../src/core/player.js';
 import {
+    canSplit,
     dueRespawns,
     excessToRemove,
+    groupMass,
     isSpawnClear,
     leaderboardEntries,
-    rankOf,
+    mergeCells,
+    rankOfGroup,
     resolveEatings,
     resolveFoodEating,
+    splitCells,
     targetAiCount,
 } from '../src/core/rules.js';
 import { clusterOffset } from '../src/core/utils.js';
+import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
 const STEP = 1 / 60;
@@ -485,27 +491,29 @@ test('吃食物：死亡球吃不到（不会被隔空吃掉）', () => {
     assert.equal(result.foodList[0], food[0], '没被吃掉就不该补位');
 });
 
-test('名次：比它重的存活球数量 + 1', () => {
-    const playerBall = ball(0, 0, 10, 'me');
-    const heavier1 = ball(0, 0, 20, 'h1');
-    const heavier2 = ball(0, 0, 30, 'h2');
+test('名次：按整组质量比（分身质量之和算一条）', () => {
+    const cells = [ball(0, 0, 10, 'me'), ball(0, 0, 20, 'me2')];
+    const heavier1 = ball(0, 0, 30, 'h1');
+    const heavier2 = ball(0, 0, 40, 'h2');
     const lighter = ball(0, 0, 8, 'l');
-    const dead = ball(0, 0, 40, 'dead');
+    const dead = ball(0, 0, 100, 'dead');
     dead.alive = false;
-    assert.equal(rankOf(playerBall, [playerBall, heavier1, heavier2, lighter, dead]), 3);
+    // 玩家组质量 = 100+400 = 500；h1(900) 与 h2(1600) 都比它重 → 第 3 名
+    assert.equal(rankOfGroup(cells, [heavier1, heavier2, lighter, dead]), 3);
+    // 换成很小的组（质量 25）：两个重球 + lighter(64) 都压过它 → 第 4 名
+    assert.equal(rankOfGroup([ball(0, 0, 5, 'me')], [heavier1, heavier2, lighter]), 4);
 });
 
-test('排行榜：降序、取前 N、玩家那条被标记', () => {
-    const playerBall = ball(0, 0, 10, 'me');
-    const a = ball(0, 0, 30, 'a');
-    const b = ball(0, 0, 20, 'b');
-    const c = ball(0, 0, 5, 'c');
-    const entries = leaderboardEntries([playerBall, a, b, c], playerBall, 3);
-    assert.equal(entries.length, 3);
-    assert.deepEqual(entries.map((e) => e.name), ['a', 'b', 'me']);
-    assert.equal(entries[2].isPlayer, true);
-    assert.equal(entries[0].isPlayer, false);
-    assert.equal(entries[0].rank, 1);
+test('排行榜：玩家只占一条（按整组质量），AI 各占一条', () => {
+    const cells = [ball(0, 0, 10, 'me'), ball(0, 0, 20, 'me2')]; // 合计 500
+    const a = ball(0, 0, 20, 'a'); // 400
+    const b = ball(0, 0, 5, 'b'); // 25
+    const entries = leaderboardEntries(cells, [a, b], 5);
+    assert.equal(entries.length, 3, '两个分身不能占两行');
+    assert.deepEqual(entries.map((e) => e.name), ['me', 'a', 'b']);
+    assert.equal(entries[0].isPlayer, true);
+    assert.equal(entries[0].weight, 500);
+    assert.equal(entries.filter((e) => e.isPlayer).length, 1);
 });
 
 test('AI 数量目标：随玩家体型单调不减，且有上下限', () => {
@@ -547,6 +555,214 @@ test('出生点判定：附近有更大的球就不安全', () => {
     big.alive = false;
     assert.equal(isSpawnClear(near, PLAYER.radius, [big]), true, '死球不构成威胁');
 });
+
+// ---------- 分裂 / 合并 ----------
+
+function cell(x, y, r, name) {
+    return new Player(name); // Player 天然属于同一 owner 组
+}
+
+// 造细胞时手动摆好位置与半径（Player 构造默认在原点）
+function makeCell(x, y, r, name) {
+    const c = cell(x, y, r, name);
+    c.x = x;
+    c.y = y;
+    c.r = r;
+    return c;
+}
+
+test('分裂：质量守恒（切开的两半合起来还是原来的质量）', () => {
+    const big = makeCell(500, 500, 30, 'me');
+    const before = groupMass([big]);
+    const cells = splitCells([big], 0, 70, (x, y, r) => {
+        const c = makeCell(x, y, r, 'me');
+        return c;
+    });
+    assert.equal(cells.length, 2, '原球自己变成一半，另一半是新球');
+    const after = groupMass(cells);
+    assert.ok(Math.abs(after - before) < 1e-6, `质量应守恒：${before} → ${after}`);
+    // 两半半径相同，且各自约等于原来的 1/√2
+    assert.equal(cells[0].r, cells[1].r);
+    assert.ok(Math.abs(cells[0].r - Math.sqrt(before / 2)) < 1e-6);
+});
+
+test('分裂：太小的球不会被切开', () => {
+    const small = makeCell(500, 500, 5, 'me');
+    const cells = splitCells([small], 0, 70, (x, y, r) => makeCell(x, y, r, 'me'));
+    assert.equal(cells.length, 1, '小于阈值就分不了');
+});
+
+test('分裂：分开的两个半球是垂直于移动方向的（不会叠在一起）', () => {
+    const big = makeCell(500, 500, 30, 'me');
+    // 朝右走 → 两半应该上下分开（垂直于前进方向），这样不会挡住去路
+    const cells = splitCells([big], 70, 0, (x, y, r) => makeCell(x, y, r, 'me'));
+    assert.equal(cells.length, 2);
+    const [origin, other] = cells;
+    assert.equal(origin, big, '原来的对象要保留（镜头/重生逻辑指着它）');
+    assert.ok(Math.abs(other.y - origin.y) > 1, '上下应该分开');
+    assert.ok(Math.abs(other.x - origin.x) < 1e-6, '横向不该动（沿前进方向排开）');
+});
+
+test('分裂：同一 owner 的分身之间不能互吃', () => {
+    const a = makeCell(500, 500, 30, 'me');
+    const b = makeCell(500, 500, 10, 'me2');
+    assert.equal(b.ownerId, a.ownerId, '分身共用 ownerId');
+    assert.equal(a.canEatBall(b), false, '大分身不能吃掉小分身');
+    const { victims } = resolveEatings([a, b], 0);
+    assert.equal(victims.length, 0);
+});
+
+test('分裂：不同 owner 仍然照常互吃（AI 之间不受影响）', () => {
+    const playerCell = makeCell(500, 500, 30, 'me');
+    const aiBall = ball(500, 500, 10, 'ai');
+    assert.notEqual(aiBall.ownerId, playerCell.ownerId);
+    const { victims } = resolveEatings([playerCell, aiBall], 0);
+    assert.deepEqual(victims, [aiBall]);
+});
+
+test('能不能分裂：够大 + 冷却结束 + 不超上限', () => {
+    const small = [makeCell(0, 0, 5, 'me')];
+    assert.equal(canSplit(small, 100, 0), false, '太小不能分');
+
+    const big = [makeCell(0, 0, 30, 'me')];
+    assert.equal(canSplit(big, 100, 0), true, '够大且冷却结束');
+    assert.equal(canSplit(big, 100, 99), false, '冷却中不能分');
+
+    const many = [];
+    for (let i = 0; i < SPLIT.maxCells; i += 1) {
+        many.push(makeCell(i * 100, 0, 30, 'me'));
+    }
+    assert.equal(canSplit(many, 100, 0), false, '超过细胞数上限就不能再分');
+});
+
+test('合并：同一 owner 的细胞靠拢后并回一个（质量守恒）', () => {
+    const a = makeCell(500, 500, 20, 'me');
+    const b = makeCell(500, 505, 20, 'me2'); // 几乎贴住
+    const before = groupMass([a, b]);
+    const result = mergeCells([a, b], 100);
+    assert.equal(result.merged, 1);
+    assert.equal(result.cells.length, 1);
+    assert.ok(Math.abs(groupMass(result.cells) - before) < 1e-6, '合并不能丢质量');
+    assert.ok(Math.abs(result.cells[0].r - Math.sqrt(before)) < 1e-6);
+});
+
+test('合并：冷却期内不合并（防止刚切开就粘回去）', () => {
+    const a = makeCell(500, 500, 20, 'me');
+    const b = makeCell(500, 503, 20, 'me2');
+    a.mergeAfter = 103;
+    b.mergeAfter = 103;
+    const result = mergeCells([a, b], 100);
+    assert.equal(result.merged, 0, '合并冷却没到不能合');
+    assert.equal(result.cells.length, 2);
+    const later = mergeCells([a, b], 200);
+    assert.equal(later.merged, 1, '冷却过了就合');
+});
+
+test('合并：离得远的、不同 owner 的都不合', () => {
+    const a = makeCell(500, 500, 20, 'me');
+    const far = makeCell(900, 500, 20, 'me2');
+    const other = ball(500, 500, 20, 'ai'); // 别人的球（独立 owner）贴上来
+    assert.equal(mergeCells([a, far], 100).merged, 0, '离得远不合并');
+    assert.equal(mergeCells([a, other], 100).merged, 0, '别人的球不能和我合并');
+});
+
+// ---------- 浮动摇杆（touch） ----------
+
+function touchEvent(type, id, x, y, changedOnly = true) {
+    const t = { identifier: id, clientX: x, clientY: y };
+    return {
+        type,
+        target: null,
+        changedTouches: [t],
+        touches: type === 'touchend' ? [] : [t],
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+    };
+}
+
+function uiTarget() {
+    // 模拟弹层里的按钮：closest('.ui-interactive') 命中
+    return { closest: (selector) => (selector.includes('ui-interactive') ? uiTarget() : null) };
+}
+
+function fakeJoystick(input) {
+    const panel = { style: {}, querySelector: () => ({ style: {} }) };
+    panel.ownerDocument = fakeTarget();
+    const joystick = new Joystick(panel, input);
+    joystick.enable();
+    return { joystick, doc: panel.ownerDocument };
+}
+
+test('摇杆：按住并拖动 → 把方向写进 input', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    assert.equal(joystick.isActive, true, '按住时处于操控状态');
+    doc.fire('touchmove', touchEvent('touchmove', 1, 340, 430));
+    assert.ok(input.speedX > 0, '向右拖 → speedX 为正');
+    assert.ok(input.speedY > 0, '向下拖 → speedY 为正');
+    assert.ok(Math.abs(distance2(input.speedX, input.speedY) - 50) < 0.001, '位移原样写入（这里正好 40/30）');
+});
+
+test('摇杆：超出面板半径时固定在边缘，不会无限增大', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { doc } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchmove', touchEvent('touchmove', 1, 900, 400));
+    const speed = distance2(input.speedX, input.speedY);
+    assert.ok(Math.abs(speed - JOYSTICK.radius) < 0.001, `应该停在满舵 ${JOYSTICK.radius}，实际 ${speed}`);
+});
+
+test('摇杆：死区内的轻微移动不驱动球（防手抖）', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { doc } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchmove', touchEvent('touchmove', 1, 301, 400));
+    assert.equal(input.speedX, 0);
+    assert.equal(input.speedY, 0);
+});
+
+test('摇杆：松手即停，操控状态解除', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchmove', touchEvent('touchmove', 1, 340, 400));
+    assert.ok(input.speedX > 0);
+    doc.fire('touchend', touchEvent('touchend', 1, 340, 400));
+    assert.equal(input.speedX, 0, '松手必须归零');
+    assert.equal(input.speedY, 0);
+    assert.equal(joystick.isActive, false);
+});
+
+test('摇杆：多指只认第一根，后来的手指不抢控', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchmove', touchEvent('touchmove', 1, 340, 400));
+    const before = input.speedX;
+    // 第二根手指按下应被忽略
+    const second = touchEvent('touchstart', 2, 100, 100);
+    doc.fire('touchstart', second);
+    assert.equal(second.defaultPrevented, false, '被忽略的手指不该被 preventDefault');
+    assert.equal(input.speedX, before, '方向仍由第一根手指控制');
+    // 第一根抬起才停（抬起第二根不停）
+    doc.fire('touchend', touchEvent('touchend', 2, 100, 100));
+    assert.equal(joystick.isActive, true, '抬起非操控手指不该停止');
+});
+
+test('摇杆：界面元素上的触摸不接管、不 preventDefault（否则按钮点不动）', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc } = fakeJoystick(input);
+    const event = touchEvent('touchstart', 1, 300, 400);
+    event.target = uiTarget();
+    doc.fire('touchstart', event);
+    assert.equal(joystick.isActive, false, '界面上的触摸不该开始操控');
+    assert.equal(event.defaultPrevented, false, '不能拦掉界面的点击');
+});
+
+function distance2(x, y) {
+    return Math.sqrt(x * x + y * y);
+}
 
 // ---------- 出生保护 ----------
 

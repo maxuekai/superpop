@@ -31,6 +31,10 @@ export class Hud {
         this.settleTimeEl = root.querySelector('.final-time');
         this.settleDetailEl = root.querySelector('.final-detail');
 
+        this.splitBtn = root.querySelector('.division');
+        this.splitLabel = root.querySelector('.division-label');
+        this.lastSplitLabel = '';
+
         this.refreshTimer = 0;
         this.lastWeight = -1;
         this.lastBoard = '';
@@ -72,6 +76,33 @@ export class Hud {
         }
     }
 
+    // 分裂按钮：手机端唯一入口（桌面还可以按空格）
+    onSplit(handler) {
+        if (this.splitBtn) {
+            this.splitBtn.addEventListener('click', handler);
+        }
+    }
+
+    // 分裂按钮的可用态与冷却文案。
+    // 只有「真能分裂」时才显示可点状态——以前这个按钮一直摆在那儿，
+    // 玩家按了没反应又容易误触，才被移除；现在长到阈值才亮。
+    updateSplit(state) {
+        if (!this.splitBtn) {
+            return;
+        }
+        const cooling = state.cooldownLeft > 0.05;
+        this.splitBtn.classList.toggle('ready', state.canSplit);
+        this.splitBtn.classList.toggle('cooling', !state.canSplit && cooling);
+        this.splitBtn.classList.toggle('hidden', !state.canSplit && !cooling);
+        if (this.splitLabel) {
+            const label = state.canSplit ? '分裂' : `${Math.ceil(state.cooldownLeft)}s`;
+            if (label !== this.lastSplitLabel) {
+                this.lastSplitLabel = label;
+                this.splitLabel.textContent = label;
+            }
+        }
+    }
+
     readName(input) {
         if (!input) {
             return NICKNAME.defaultName;
@@ -89,16 +120,17 @@ export class Hud {
             return;
         }
         this.refreshTimer = HUD.refreshInterval;
-        this.updateWeight(game.player);
+        this.updateWeight(game.playerMass());
         this.renderLeaderboard(game.leaderboard());
+        this.updateSplit(game.splitState());
     }
 
-    // 体重面板 = r² 取整
-    updateWeight(ball) {
+    // 体重面板 = 玩家整组质量（分身的质量之和）
+    updateWeight(mass) {
         if (this.weightEl === null) {
             return;
         }
-        const weight = Math.round(ball.mass);
+        const weight = Math.round(mass);
         if (weight === this.lastWeight) {
             return;
         }

@@ -14,7 +14,7 @@ export class Joystick {
         this.knob = controlPanel.querySelector('.direction-control');
         // 监听整个文档：屏幕上任何位置按下都能操控
         this.layer = controlPanel.ownerDocument;
-        this.player = player;
+        this.input = player;
 
         // 正在操控的触摸点 identifier（多指只认第一根手指）
         this.touchId = null;
@@ -93,12 +93,12 @@ export class Joystick {
 
                     // 死区：手指没怎么动就别动球，避免手抖漂移
                     if (distance(tempX, tempY, 0, 0) < JOYSTICK.deadZone) {
-                        this.player.speedX = 0;
-                        this.player.speedY = 0;
+                        this.input.speedX = 0;
+                        this.input.speedY = 0;
                         return;
                     }
-                    this.player.speedX = this.diffX || 0;
-                    this.player.speedY = this.diffY || 0;
+                    this.input.speedX = this.diffX || 0;
+                    this.input.speedY = this.diffY || 0;
                 }
                 break;
 
@@ -116,8 +116,8 @@ export class Joystick {
                 this.knob.style.left = '50%';
                 this.knob.style.top = '50%';
                 // 松手即停
-                this.player.speedX = 0;
-                this.player.speedY = 0;
+                this.input.speedX = 0;
+                this.input.speedY = 0;
                 break;
         }
     }

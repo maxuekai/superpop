@@ -6,7 +6,9 @@ import { distance, shadeColor } from './utils.js';
 // 数值是「摇杆像素量」，实际位移要除以速度分母（越大越慢）。
 // 质量约定为 r²，和体重面板显示口径一致。
 export class Ball {
-    constructor(x, y, r, bColor, name) {
+    static ownerSeq = 0;
+
+    constructor(x, y, r, bColor, name, ownerId) {
         this.x = x;
         this.y = y;
         this.r = r;
@@ -14,6 +16,9 @@ export class Ball {
         this.speedY = 0;
         this.bColor = bColor;
         this.name = name || '';
+        // 归属：默认每个球自成一组（AI 之间照常互吃）；
+        // 玩家的多个分身共用同一个 ownerId，于是彼此不能互吃、排行榜按组合计
+        this.ownerId = ownerId || `ball${Ball.nextOwnerId()}`;
         // 每吃一颗食物的半径收益：玩家用 PLAYER.growthPerFood，AI 用 AI.foodGain
         this.foodGain = PLAYER.growthPerFood;
         // 视觉半径：用弹簧跟随实际半径，吃到东西会冲过头再回弹（见 update/onEat）
@@ -26,6 +31,13 @@ export class Ball {
         this.shieldUntil = 0;
         // 由 Game 每帧根据当前时间刷新，draw 用来画保护光环
         this.shielded = false;
+        // 分裂相关：所属细胞组的合并冷却（世界时间，秒）
+        this.mergeAfter = 0;
+    }
+
+    static nextOwnerId() {
+        Ball.ownerSeq += 1;
+        return Ball.ownerSeq;
     }
 
     // 质量 = 半径平方
@@ -91,13 +103,16 @@ export class Ball {
         return distance(this.x, this.y, foodX, foodY) <= this.r + FOOD.radius;
     }
 
-    // 尺寸是否够吃对方（只看大小，不看距离）
+    // 尺寸是否够吃对方（只看大小，不看距离，也不看是不是自己的分身）
     outweighs(other) {
         return this.r > other.r * EAT.ratio;
     }
 
-    // 能否吃掉对方：尺寸够 + 对方圆心已进入自己体内
+    // 能否吃掉对方：尺寸够 + 对方圆心已进入自己体内；**自己的分身不吃**
     canEatBall(other) {
+        if (other.ownerId === this.ownerId) {
+            return false;
+        }
         return this.outweighs(other) && distance(this.x, this.y, other.x, other.y) <= this.r;
     }
 

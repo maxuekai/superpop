@@ -1,15 +1,16 @@
-import { KEYS } from '../config.js';
+import { ACTIONS, KEYS } from '../config.js';
 
-// 键盘操控（WASD / 方向键）：和浮动摇杆一样把方向写进 player.speedX/speedY，
-// 两者共用同一套速度分母，所以键盘与触屏手感一致。
-// 与摇杆的关系：摇杆正在操控时（isBlocked）键盘让位，松手归零；
-// 在输入框/弹层里打字时完全不响应，别把昵称输成 WASD。
+// 键盘操控（WASD / 方向键 + 动作键）：方向写进 input.speedX/speedY（单位是「摇杆像素量」），
+// 与浮动摇杆共用同一套速度分母，所以键盘与触屏手感一致。
+// 与摇杆的关系：摇杆正在操控时（isBlocked）键盘让位；在输入框/弹层里打字时不响应。
+// onAction 用来接动作键（分裂等），避免为每个动作再单独挂一个 document 监听。
 export class Keyboard {
-    constructor(target, player, options = {}) {
+    constructor(target, input, options = {}) {
         this.target = target;
-        this.player = player;
+        this.input = input;
         // 摇杆在用时让位；不传就默认永远不阻塞
         this.isBlocked = options.isBlocked || (() => false);
+        this.onAction = options.onAction || (() => {});
 
         this.pressed = new Set();
 
@@ -23,8 +24,17 @@ export class Keyboard {
     isGameKey(code) {
         return KEYS.up.includes(code)
             || KEYS.down.includes(code)
-            || KEYS.left.includes(code)
-            || KEYS.right.includes(code);
+            || KEYS.right.includes(code)
+            || KEYS.left.includes(code);
+    }
+
+    isActionKey(code) {
+        for (const list of Object.values(ACTIONS)) {
+            if (list.includes(code)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     isIgnorable(target) {
@@ -32,11 +42,19 @@ export class Keyboard {
     }
 
     handleKeyDown(e) {
-        if (!this.isGameKey(e.code) || this.isIgnorable(e.target)) {
+        const action = this.isActionKey(e.code);
+        if (!action && !this.isGameKey(e.code)) {
             return;
         }
-        // 方向键会滚动页面，按游戏键时挡掉
+        if (this.isIgnorable(e.target)) {
+            return;
+        }
+        // 方向键会滚动页面、Space 会滚动/触发按钮，按游戏键时挡掉
         e.preventDefault();
+        if (action) {
+            this.onAction(e.code);
+            return;
+        }
         this.pressed.add(e.code);
         this.apply();
     }
@@ -64,8 +82,8 @@ export class Keyboard {
 
     clear() {
         this.pressed.clear();
-        this.player.speedX = 0;
-        this.player.speedY = 0;
+        this.input.speedX = 0;
+        this.input.speedY = 0;
     }
 
     // 按住的方向合成一个向量：斜向自动归一化，斜着走不会比直着快
@@ -73,13 +91,13 @@ export class Keyboard {
         if (this.isBlocked()) {
             return;
         }
-        let dx = 0;
-        let dy = 0;
         if (this.pressed.size === 0) {
-            this.player.speedX = 0;
-            this.player.speedY = 0;
+            this.input.speedX = 0;
+            this.input.speedY = 0;
             return;
         }
+        let dx = 0;
+        let dy = 0;
         for (const code of this.pressed) {
             if (KEYS.left.includes(code)) {
                 dx -= 1;
@@ -92,8 +110,8 @@ export class Keyboard {
             }
         }
         const len = Math.sqrt(dx * dx + dy * dy) || 1;
-        this.player.speedX = (dx / len) * KEYS.power;
-        this.player.speedY = (dy / len) * KEYS.power;
+        this.input.speedX = (dx / len) * KEYS.power;
+        this.input.speedY = (dy / len) * KEYS.power;
     }
 
     enable() {

@@ -1,4 +1,4 @@
-import { AI, HUD, PLAYER } from '../config.js';
+import { AI, HUD, PLAYER, SPLIT } from '../config.js';
 import { clamp, distance } from './utils.js';
 
 // 玩法裁定层：把「一帧内发生什么」写成纯函数，不碰 canvas / DOM，
@@ -73,28 +73,34 @@ export function resolveFoodEating(foodList, balls, makeFood) {
     return { foodList: kept, eaten };
 }
 
-// 名次：比它重的存活球数量 + 1。球已死亡时也算（例如结算界面要显示死亡那一刻的名次）。
-export function rankOf(ball, balls) {
+// 名次：按"整组质量"比。cells 是玩家那一组（可能已全灭，此时也算），others 是别人的球。
+// 例：结算界面要显示死亡那一刻的名次，所以 cells 全灭时也要能算。
+export function rankOfGroup(cells, others) {
+    const total = groupMass(cells);
     let rank = 1;
-    for (const other of balls) {
-        if (other !== ball && other.alive && other.mass > ball.mass) {
+    for (const other of others) {
+        if (other.alive && other.ownerId !== cells[0].ownerId && other.mass > total) {
             rank += 1;
         }
     }
     return rank;
 }
 
-// 排行榜：存活球按体重降序取前 N，玩家那条标记 isPlayer。
-export function leaderboardEntries(balls, player, size = HUD.leaderboardSize) {
-    return balls
-        .filter((ball) => ball.alive)
-        .sort((a, b) => b.mass - a.mass)
+// 排行榜：玩家按整组质量算一条，AI 每个球一条，降序取前 N。
+export function leaderboardEntries(cells, others, size = HUD.leaderboardSize) {
+    const total = groupMass(cells);
+    const rows = others
+        .filter((ball) => ball.alive && ball.ownerId !== cells[0].ownerId)
+        .map((ball) => ({ name: ball.name, weight: ball.mass, isPlayer: false }));
+    rows.push({ name: cells[0].name, weight: total, isPlayer: true });
+    return rows
+        .sort((a, b) => b.weight - a.weight)
         .slice(0, size)
-        .map((ball, index) => ({
+        .map((row, index) => ({
             rank: index + 1,
-            name: ball.name,
-            weight: Math.round(ball.mass),
-            isPlayer: ball === player,
+            name: row.name,
+            weight: Math.round(row.weight),
+            isPlayer: row.isPlayer,
         }));
 }
 
@@ -120,6 +126,89 @@ export function dueRespawns(aiList, now) {
     return aiList.filter((ai) => !ai.alive && Number.isFinite(ai.respawnAt) && now >= ai.respawnAt);
 }
 
+// ---------- 分裂 / 合并（玩家可以有多个细胞） ----------
+// 一个"细胞组"= 同一 ownerId 的所有存活细胞。质量守恒：分裂只是把质量对半分。
+
+// 整组质量（体重面板、排行榜都用这个口径，不是单个细胞的半径平方）
+export function groupMass(cells) {
+    let total = 0;
+    for (const cell of cells) {
+        if (cell.alive) {
+            total += cell.mass;
+        }
+    }
+    return total;
+}
+
+// 现在能不能分裂：需要有够大的细胞，且冷却结束，且没超过细胞数上限
+export function canSplit(cells, now, lastSplitAt) {
+    if (now - lastSplitAt < SPLIT.cooldown) {
+        return false;
+    }
+    if (cells.length >= SPLIT.maxCells) {
+        return false;
+    }
+    return cells.some((cell) => cell.alive && cell.r >= SPLIT.minCellRadius);
+}
+
+// 分裂：把所有够大的细胞一切两半，朝当前移动方向的垂直方向分开（避免挡住去路）。
+// makeCell(x, y, r, from) 由调用方提供（Player 实例 / 随机颜色）。
+// 返回新的细胞数组（原数组不动，方便测试与回滚）。
+export function splitCells(cells, dirX, dirY, makeCell) {
+    const out = [];
+    const length = Math.sqrt(dirX * dirX + dirY * dirY);
+    // 移动方向为单位向量时，分开方向取其垂直方向；没有输入就用 x 轴
+    const ux = length > 0.0001 ? dirX / length : 1;
+    const uy = length > 0.0001 ? dirY / length : 0;
+    const px = -uy;
+    const py = ux;
+
+    for (const cell of cells) {
+        if (!cell.alive || cell.r < SPLIT.minCellRadius) {
+            out.push(cell);
+            continue;
+        }
+        // 原来的球自己变成一半（保持对象引用：镜头/重生逻辑都指着它），
+        // 另一半是新球；两半各得一半质量，总量守恒。
+        const half = Math.sqrt(cell.mass / 2);
+        const gap = cell.r * 0.35;
+        const originX = cell.x;
+        const originY = cell.y;
+        cell.r = half;
+        cell.x = originX - px * gap;
+        cell.y = originY - py * gap;
+        out.push(cell);
+        out.push(makeCell(originX + px * gap, originY + py * gap, half, cell));
+    }
+    return out;
+}
+
+// 合并：同一 owner 的两个细胞靠得太近、且过了合并冷却，就并回一个（质量相加）。
+// 返回 { cells, merged }；merged 是本帧发生了几次合并（给动画/音效用）。
+export function mergeCells(cells, now) {
+    const out = [];
+    let merged = 0;
+    for (const cell of cells) {
+        if (!cell.alive) {
+            continue;
+        }
+        // 已在本帧并过别人的，跳过（避免一次吞掉三个）
+        const partner = out.find((other) => other.alive
+            && other.ownerId === cell.ownerId
+            && now >= Math.max(other.mergeAfter, cell.mergeAfter)
+            && distance(other.x, other.y, cell.x, cell.y) < (other.r + cell.r) * SPLIT.mergeFactor);
+        if (partner) {
+            partner.r = Math.sqrt(partner.mass + cell.mass);
+            partner.mergeAfter = now;
+            merged += 1;
+            continue;
+        }
+        out.push(cell);
+    }
+    return { cells: out, merged };
+}
+
+// ---------- 出生点 ----------
 // 出生点是否安全：远离所有存活的球，比目标大的留更宽的余量。
 export function isSpawnClear(pos, radius, balls, extraGap = 24) {
     for (const ball of balls) {

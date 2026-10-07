@@ -80,9 +80,19 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 - 游戏状态机：`menu`（开局界面）→ `playing` → `dead`（结算界面）。只有 `playing` 才跑 `updateWorld`，弹层期间世界冻结。
 - 世界固定 1024×768；画布/视口随窗口变化，缩放规则见 `config.js` 的 `VIEW`：屏幕长边锚定 `VIEW.longEdgeWorld` 个世界单位，并按 `(r/初始半径)^VIEW.zoomExponent` 随体型放大视距，但不小于"窗口装下整个世界"的缩放（视口永不超过世界，否则相机钳制出负坐标）。相机是死区跟随（死区 = 半视口），靠边时视口会被钳在世界内，所以玩家在地图边缘时不会位于屏幕正中——这是既有设计。
 - 渲染按 `devicePixelRatio` 缩放，`Game.draw` 每帧 `setTransform` 后平移到相机视口，Map/Player 直接用世界坐标绘制。
-- 每步位移 = speedX / (speedDivisor + 超出初始半径部分 × slowdownPerRadius) × (dt × speedUnit)，越大越慢；摇杆直接写 `player.speedX/speedY`（未满舵时线性变速，手指位移小于 `JOYSTICK.deadZone` 不动球），松手（touchend）归零。
+- 每步位移 = speedX / (speedDivisor + 超出初始半径部分 × slowdownPerRadius) × (dt × speedUnit)，越大越慢；摇杆/键盘直接写 `game.input`（未满舵时线性变速，手指位移小于 `JOYSTICK.deadZone` 不动球），松手（touchend）归零。
 - **"大球追不上"不要看速度公式下结论**：小体型段真正的门槛是互吃比例（`r > 对方r × 1.15`，差一点点就永远吃不到）；而速度只是一阶估算——实测猎手比猎物慢 40%（r=50 vs r=10：38.9 vs 64.4 单位/秒）仍能抓到 16/20，因为逃命 AI 达不到理论速度、有界地图躲不了角落、还会边逃边长大。`npm run sim -- --sweep` 是这条的验收口径。
-- 质量口径统一为 `r²`，体重面板/排行榜/互吃吸收都用它。吃食物 `r += 球自己的 foodGain`；互吃按 `EAT.ratio`(1.15) 的半径比判定，`r = sqrt(r² + 对方r² × EAT.absorb)`。
+- 质量口径统一为 `r²`。玩家可以有**多个分身**（见下），体重面板与排行榜都按「整组质量之和」统计；
+  单个球的吃食物收益 `r += 球自己的 foodGain`；互吃按 `EAT.ratio`(1.15) 的半径比判定，
+  `r = sqrt(r² + 对方r² × EAT.absorb)`。
+- **分裂**（`SPLIT` 常量 + `rules.splitCells`）：长到 `minCellRadius` 才能分；`requestSplit()` 把够大的
+  细胞一切两半（原来的球自己变成一半、另一半是新球，**质量守恒**），冷却 8 秒、最多 8 个分身。
+  分开方向是**移动方向的垂直方向**，不挡去路。分身靠拢到 `(r1+r2)×mergeFactor` 且过了
+  `mergeCooldown` 会自动合并（`rules.mergeCells`）。同一 `ownerId` 的分身之间**不能互吃**
+  （`Ball.canEatBall` 第一条就排除同 owner）；分身被吃只损失那份质量，**全部吃光才判死亡**。
+  镜头与视野缩放跟随「整组里最大的分身」，所以分裂时视野不会跳。
+- **输入层是 `game.input = { speedX, speedY }`**，摇杆和键盘都写它，再由 `updateWorld` 同步给
+  每一个分身（分身不是一个球，共用同一个球对象的话输入只会作用在其中一个上）。
 - **一帧内的玩法裁定集中在 `core/rules.js`**（纯函数、不碰 DOM）：`resolveEatings` 先按帧初状态把所有「谁吃谁」配对算完、**已被吃掉的球不再作为吃人方**（否则链式互吞会让同一局重放结果随数组顺序变化），再统一结算质量；`resolveFoodEating` 结算吃食物并即时补位；`rankOf`/`leaderboardEntries`/`targetAiCount`/`excessToRemove`/`dueRespawns`/`isSpawnClear` 同理。`Game` 只负责准备数据、调用、处理结果与渲染——**新增玩法规则优先写进 rules.js，才能被单测覆盖**。
 - **食物不烤进地图**：背景只生成一次，食物每帧按视口动态绘制，并**按颜色合批**（`Game.drawFood` 把同色食物合并成一条路径；逐颗 fill 在 360 颗时会有上千次绘制调用）。吃掉一颗立即在别处补一颗（总量恒定 `FOOD.count`），生成位置避开所有存活球；吃到时给视觉半径一次弹簧回弹（见 `ball.js` 的 `displayR/rVel`）。
 - **食物成簇生成**：不是均匀散点，而是先找一个避开球的簇心、再让每颗落在 `clusterRadius` 内（`utils.clusterOffset`）。散点太难点——单颗食物在手机上只有 4~7 css px 直径，散开时基本是「擦身而过」；成簇后能看见一片、一把扫过去。
@@ -94,10 +104,10 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。玩�
 - 出生点（玩家和 AI 都用 `Game.safeSpawnPosition`）：避开所有存活球，并留出 `SPAWN.edgeGap` 远离世界边缘。
 - 出生保护：开局/重生后 `PLAYER.spawnShield`(2.5s)、AI 重生后 `AI.respawnShield`(1.5s) 内吃不掉，`Ball.shielded` 为真时画一圈光环；保护时间从真正 `begin()`/`respawnPlayer()` 那一刻起算（菜单界面世界时间也在走）。
 - 摇杆是浮动模式（touch 事件）：按住屏幕任意位置，面板在该处出现，拖动控制方向，松手消失且球停；多指只认第一根手指。`.ui-interactive` 元素（开局/结算弹层、输入框、按钮）上的触摸不接管也不 preventDefault，否则按钮点不动。
-- 键盘（`KEYS` + `Keyboard`）：WASD/方向键，写法和摇杆一样（往 `player.speedX/speedY` 写「摇杆像素量」，力度取 `KEYS.power`=摇杆满舵），斜向自动归一化。三条约束：① 摇杆正在操控时键盘让位（`main.js` 传 `isBlocked: () => joystick.isActive`）；② 事件 target 命中 `KEYS.ignoreTarget`（输入框/弹层）时不响应也不 preventDefault，否则昵称会输成 WASD；③ `blur` 与 `visibilitychange`（切后台）时清空按键，防止 keyup 丢失后"卡住一直走"。
+- 键盘（`KEYS` + `Keyboard`）：WASD/方向键，写法和摇杆一样（往 `input.speedX/speedY` 写「摇杆像素量」，力度取 `KEYS.power`=摇杆满舵），斜向自动归一化。`ACTIONS` 里的动作键（`Space`=分裂）走 `onAction` 回调，不污染方向集合。三条约束：① 摇杆正在操控时键盘让位（`main.js` 传 `isBlocked: () => joystick.isActive`）；② 事件 target 命中 `KEYS.ignoreTarget`（输入框/弹层）时不响应也不 preventDefault，否则昵称会输成 WASD；③ `blur` 与 `visibilitychange`（切后台）时清空按键，防止 keyup 丢失后"卡住一直走"。
 
 ## 测试
 
-`npm test` 分两段：`scripts/check.js` 对 `src/`、`server/`、`scripts/` 下所有 `.js` 跑 `node --check`；`scripts/rules-test.js` 断言玩法规则，覆盖三组：① 球的规则（吃食物判定、互吃阈值、质量吸收、dt 比例、越界钳制、出生保护）；② AI 决策（追击/逃离/贴墙斜逃/觅食/避边界/速度上限、边界吃食物）；③ 输入（键盘 7 条：方向映射、斜向归一化、多键、输入框隔离、摇杆让位、失焦清键）；④ 整局裁定（`rules.js`：互吃结算与不链式、吃食物补位、名次/排行榜、AI 数量校准、重生到期、出生点安全）。**改动 `src/core/` 下任何玩法逻辑或 `src/config.js` 的数值后必须跑一次；`Game` 本身因依赖 canvas 无法直接测，所以它的行为靠上面的仿真脚本回归。**
+`npm test` 分两段：`scripts/check.js` 对 `src/`、`server/`、`scripts/` 下所有 `.js` 跑 `node --check`；`scripts/rules-test.js` 断言玩法规则，覆盖五组：① 球的规则（吃食物判定、互吃阈值、质量吸收、dt 比例、越界钳制、出生保护）；② AI 决策（追击/逃离/贴墙斜逃/觅食/避边界/速度上限、边界吃食物）；③ 输入（键盘 7 条：方向映射、斜向归一化、多键、输入框隔离、摇杆让位、失焦清键；摇杆 6 条：拖动方向、边缘限幅、死区、松手归零、多指不抢控、界面元素不接管）；④ 整局裁定（`rules.js`：互吃结算与不链式、吃食物补位、名次/排行榜、AI 数量校准、重生到期、出生点安全）；⑤ 分裂/合并（质量守恒、太小不能分、垂直于移动方向分开、同 owner 不互吃、可分条件、合并与合并冷却）。**改动 `src/core/` 下任何玩法逻辑或 `src/config.js` 的数值后必须跑一次；`Game` 本身因依赖 canvas 无法直接测，所以它的行为靠上面的仿真脚本回归。**
 
 调 AI 手感参数（`fleeRange`、`escape*`）时用 `npm run sim`：它用固定随机种子跑 20 轮「猎手满舵直线追击」，输出存活时间/被吃轮数/被逼墙比例，结果可复现。也可以 `npm run sim -- 120` 这样临时覆盖 `fleeRange` 来对比数值。
