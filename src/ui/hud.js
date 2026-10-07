@@ -49,7 +49,10 @@ export class Hud {
     // ---------- 事件绑定 ----------
 
     onStart(handler) {
-        const fire = () => handler(this.readName(this.startInput));
+        const fire = () => {
+            this.releaseFocus();
+            handler(this.readName(this.startInput));
+        };
         if (this.startBtn) {
             this.startBtn.addEventListener('click', fire);
         }
@@ -63,7 +66,10 @@ export class Hud {
     }
 
     onRespawn(handler) {
-        const fire = () => handler(this.readName(this.respawnInput));
+        const fire = () => {
+            this.releaseFocus();
+            handler(this.readName(this.respawnInput));
+        };
         if (this.respawnBtn) {
             this.respawnBtn.addEventListener('click', fire);
         }
@@ -73,6 +79,19 @@ export class Hud {
                     fire();
                 }
             });
+        }
+    }
+
+    // 点完"开始游戏"/"再来一局"后要把焦点从按钮、输入框上摘掉：
+    // 焦点还留在弹层里时 keydown 的 target 是弹层内的元素，而 KEYS.ignoreTarget
+    // 里含 .ui-interactive → 会被当成"正在输入框里打字"，第一个按下的游戏键
+    // （尤其是分裂的空格）被直接丢掉。弹层随后是 display:none，浏览器一般会自动
+    // 把焦点还给 body，但不该依赖这个行为。
+    releaseFocus() {
+        const doc = (this.startBtn && this.startBtn.ownerDocument) || null;
+        const active = doc && doc.activeElement;
+        if (active && typeof active.blur === 'function') {
+            active.blur();
         }
     }
 
