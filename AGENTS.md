@@ -69,8 +69,16 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 - **状态机**：`menu` → `playing` → `dead`（被吃）/ `crowned`（称王）。只有 `playing` 跑 `updateWorld`，
   弹层期间世界冻结。称王条件在 `rules.isCrowned`（质量 ≥ `KING.mass` **且**当前第一）。
 - **世界尺寸与食物数必须同步**：`WORLD` 和 `FOOD.count` 一起改，保持面密度 λ 不变
-  （屏内食物数 = λ × 视口面积）。地图放大还会顺带松开 `updateViewScale` 里的 `fitScale` 地板，
-  但手机上仍会在 r≈12 之后被钳死（视口不许大于世界，否则相机钳制出负坐标）——见 tuning.md。
+  （屏内食物数 = λ × 视口面积）。竖屏手机的视野上限由**世界高度**决定，世界越高缩放区间越长。
+- **相机钳制**：视口大于世界时 `Camera.clampView` 必须**居中**，不能贴左上角——旧的"左边超出→贴左"
+  和"右边超出→贴右"两条规则会互相打架，`xView` 在负坐标和 0 之间横跳、球偏在屏幕一侧。
+  `VIEW.maxZoomOut`(1.3) 靠这个居中行为才成立。
+- **改 WORLD 前必须扫三个指标**：`npm run sim -- --worldW X --worldH Y`（追击难度，地图越大 AI 越抓不到）、
+  `npm run sim:food -- --trials 8`（AI/玩家平衡 + 屏内食物数）、`node scripts/zoom-report.mjs --scan`
+  （缩放区间）。三者互相拉扯。想延长单局请调 `KING.mass`，不要继续放大地图。
+- **AI 的觅食减速和逃跑减速是两个系数**：`AI.foragePower` 只作用于非逃跑模式，`AI.speedScale` 两边都乘。
+  想让 AI 吃得多只能动前者——动 `speedScale` 会同时加快逃跑，实测 0.92→1.05 让被吃率从
+  20/20 崩到 4/20（"AI 吃得多"和"抓得住 AI"是对立的）。
 - **视野缩放必须平滑**：`updateViewScale` 用 `utils.smoothTowards` 指数逼近目标值，
   不能直接赋值。目标缩放的来源全是硬跳变——手机地址栏收放（实测一帧跳 12~15% 视口宽度）、
   转屏（33%）、吃人、分身合并。`resize()` 也不能无条件 snap，否则又回到硬跳；
