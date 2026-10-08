@@ -5,6 +5,10 @@ import { Keyboard } from './input/keyboard.js';
 import { Hud } from './ui/hud.js';
 
 window.addEventListener('load', () => {
+    // 本地诊断脚手架（src/debug-local.js，已在 .gitignore 里）：文件不存在时静默跳过，
+    // 所以这个 hook 提交上去是安全的。定位完真机问题把那个文件删掉即可。
+    import('./debug-local.js').catch(() => {});
+
     const canvas = document.getElementById('ball');
     const hud = new Hud(document);
     const game = new Game(canvas, hud);

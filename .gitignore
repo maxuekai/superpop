@@ -9,3 +9,10 @@ npm-debug.log
 # 本地局域网二维码（IP 会变，不入库）
 qr.png
 .qr-last-url
+
+# 诊断日志的**产出文件**（面板里点"导出"下载下来的那份），不入库。
+# 工具本身 src/debug-local.js 是正常代码，要入库。
+debug-log.txt
+
+# 仓库根目录里的临时探针脚本（量数据用的，跑完就删）
+scripts/_tmp-*
