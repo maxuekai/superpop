@@ -71,26 +71,23 @@ export class Camera {
         this.clampView();
     }
 
-    // 视口超出世界范围时钳制回来
+    // 视口超出世界范围时钳制回来。
+    // 视口比世界还大时**居中**而不是贴左上角——贴左上角的话 xView 会被
+    // "左边超出"和"右边超出"两条规则来回打，变成负坐标和反复横跳，球也偏在屏幕一侧。
+    // 居中之后露出的世界外区域在左右两边均分。
     clampView() {
-        // 更新视口矩形
-        this.viewportRect.set(this.xView, this.yView);
+        const worldW = this.worldRect.width;
+        const worldH = this.worldRect.height;
 
-        if (this.viewportRect.within(this.worldRect)) {
-            return;
-        }
-        if (this.viewportRect.left < this.worldRect.left) {
-            this.xView = this.worldRect.left;
-        }
-        if (this.viewportRect.top < this.worldRect.top) {
-            this.yView = this.worldRect.top;
-        }
-        if (this.viewportRect.right > this.worldRect.right) {
-            this.xView = this.worldRect.right - this.wView;
-        }
-        if (this.viewportRect.bottom > this.worldRect.bottom) {
-            this.yView = this.worldRect.bottom - this.hView;
-        }
+        this.xView = this.wView >= worldW
+            ? (worldW - this.wView) / 2
+            : Math.min(worldW - this.wView, Math.max(0, this.xView));
+
+        this.yView = this.hView >= worldH
+            ? (worldH - this.hView) / 2
+            : Math.min(worldH - this.hView, Math.max(0, this.yView));
+
+        this.viewportRect.set(this.xView, this.yView);
     }
 
     // 立刻把视口居中到目标身上（重生、传送用），避免相机慢慢追过去

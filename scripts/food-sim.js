@@ -32,6 +32,15 @@ if (flagValue('divisor') !== undefined) PLAYER.speedDivisor = flagValue('divisor
 if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('slowdown');
 if (flagValue('playerGain') !== undefined) PLAYER.growthPerFood = flagValue('playerGain');
 if (flagValue('foodGain') !== undefined) AI.foodGain = flagValue('foodGain');
+// AI 行为旋钮：调觅食效率/追击范围时用。AI/玩家比掉下来时先扫这几个，
+// 而不是去动 foodGain（瓶颈往往在决策而不是收益）
+if (flagValue('thinkInterval') !== undefined) AI.thinkInterval = flagValue('thinkInterval');
+if (flagValue('chaseRange') !== undefined) AI.chaseRange = flagValue('chaseRange');
+if (flagValue('escapeFoodRange') !== undefined) AI.escapeFoodRange = flagValue('escapeFoodRange');
+if (flagValue('speedScale') !== undefined) AI.speedScale = flagValue('speedScale');
+// AI 觅食时还有一层额外减速（config.AI.foragePower，原为硬编码 0.95），
+// 和 speedScale 叠起来是 0.874 倍满舵——比玩家慢 12.6%。--foragePower=1 可以关掉它。
+if (flagValue('foragePower') !== undefined) AI.foragePower = flagValue('foragePower');
 
 // 与 Ball.update 同一套公式
 function speedOf(r) {
@@ -141,8 +150,33 @@ function run(label, makeBall, gain) {
     return { eaten, mass: ball.mass };
 }
 
-console.log(`\n【觅食仿真】各跑 ${SECONDS} 秒（玩家球/AI 球都从 100kg 起）`);
-const playerResult = run('玩家（永远追最近的食物）', () => new Forager(512, 384, PLAYER.radius, '#fff', 'p'), PLAYER.growthPerFood);
-const aiResult = run('AI（自带决策）', () => new AiPlayer(512, 384, PLAYER.radius, '#fff', 'ai'), AI.foodGain ?? PLAYER.growthPerFood);
+// 多次采样取平均：30 秒单局对 AI 决策来说是混沌系统的一次抽样，
+// 不同参数会让路线发散、结果相差 20%+（实测 foragePower 0.95→1 比值从 0.77 掉到 0.67，
+// 但那是单局噪声不是真实趋势）。flee-sim 靠 20 轮取平均，这里同理。
+const TRIALS = flagValue('trials') ?? 1;
+const BASE_SEED = 20261007;
 
-console.log(`  AI / 玩家 食物获取比：${(aiResult.eaten / playerResult.eaten).toFixed(2)}（>1 表示 AI 吃得比玩家快）`);
+function runTrial(label, makeBall, gain, seed) {
+    rngSeed = seed;
+    Math.random = () => {
+        rngSeed = (rngSeed * 1103515245 + 12345) % 2147483648;
+        return rngSeed / 2147483648;
+    };
+    return run(label, makeBall, gain);
+}
+
+console.log(`\n【觅食仿真】各跑 ${SECONDS} 秒 × ${TRIALS} 局（玩家球/AI 球都从 100kg 起）`);
+const cx = WORLD.width / 2;
+const cy = WORLD.height / 2;
+let playerTotal = 0;
+let aiTotal = 0;
+for (let i = 0; i < TRIALS; i += 1) {
+    const seed = BASE_SEED + i * 7919;
+    const p = runTrial(`  [第 ${i + 1} 局] 玩家`, () => new Forager(cx, cy, PLAYER.radius, '#fff', 'p'), PLAYER.growthPerFood, seed);
+    const a = runTrial(`  [第 ${i + 1} 局] AI`, () => new AiPlayer(cx, cy, PLAYER.radius, '#fff', 'ai'), AI.foodGain ?? PLAYER.growthPerFood, seed);
+    playerTotal += p.eaten;
+    aiTotal += a.eaten;
+}
+const avg = (v) => v / TRIALS;
+console.log(`\n  平均：玩家 ${avg(playerTotal).toFixed(1)} 颗/局，AI ${avg(aiTotal).toFixed(1)} 颗/局`);
+console.log(`  AI / 玩家 食物获取比：${(aiTotal / playerTotal).toFixed(3)}（>1 表示 AI 吃得比玩家快）`);

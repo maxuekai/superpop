@@ -88,6 +88,9 @@ export class AiPlayer extends Ball {
                 nearestFoodDist = d;
             }
         }
+        // 试过给食物目标加滞后（"已在追的食物没远出 N 倍就不换"），比值纹丝不动
+        // （0.860 全档一样），说明 AI 并没有在两个差不多远的食物之间抖。
+        // 已回退——没测出收益的复杂度不要留着。
 
         // 有威胁先跑，命重要
         if (threat) {
@@ -247,7 +250,9 @@ export class AiPlayer extends Ball {
             dy /= len;
         }
 
-        const power = JOYSTICK.radius * AI.speedScale * (this.fleeing ? 1 : 0.95);
+        // 逃跑时全速；其他模式（觅食/追击/游走）叠一层 AI.foragePower。
+    // 两者相乘就是 AI 相对满舵的实际功率，见 config.js 里的说明。
+    const power = JOYSTICK.radius * AI.speedScale * (this.fleeing ? 1 : AI.foragePower);
         this.speedX = dx * power;
         this.speedY = dy * power;
     }

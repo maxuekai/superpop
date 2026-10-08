@@ -25,7 +25,7 @@ import {
     splitCells,
     targetAiCount,
 } from '../src/core/rules.js';
-import { clusterOffset, smoothTowards } from '../src/core/utils.js';
+import { clusterOffset, randomFloat, smoothTowards } from '../src/core/utils.js';
 import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
@@ -250,6 +250,36 @@ test('AI 贴边时会往回躲', () => {
     const world = { width: WORLD.width, height: WORLD.height };
     edge.update(STEP, world, [edge], []);
     assert.ok(edge.speedX > 0, `应该远离左边界，实际 speedX=${edge.speedX}`);
+});
+
+test('AI 觅食不会饿死：周围全是食物、没有威胁时必须吃到东西', () => {
+    // 回归：给食物目标加"滞后"时，AI 会死抱一颗已经被吃掉的食物不放，
+    // 整局只吃到 1 颗（sim:food 的比值掉到 0.01）。单看比值不容易发现是"饿死"，
+    // 这条直接断言"有吃有喝就该长大"。
+    const world = { width: WORLD.width, height: WORLD.height };
+    const cx = WORLD.width / 2;
+    const cy = WORLD.height / 2;
+    const crowd = () => {
+        const list = [];
+        for (let i = 0; i < 120; i += 1) {
+            list.push({ x: cx + randomFloat(-220, 220), y: cy + randomFloat(-220, 220) });
+        }
+        return list;
+    };
+    const foodList = crowd();
+    const eater = ai(cx, cy, PLAYER.radius);
+    const startR = eater.r;
+    for (let i = 0; i < 60 * 10; i += 1) {
+        eater.update(STEP, world, [eater], foodList);
+        for (let j = foodList.length - 1; j >= 0; j -= 1) {
+            if (eater.canEatFood(foodList[j].x, foodList[j].y)) {
+                eater.r += eater.foodGain;
+                foodList.splice(j, 1);
+                foodList.push({ x: cx + randomFloat(-220, 220), y: cy + randomFloat(-220, 220) });
+            }
+        }
+    }
+    assert.ok(eater.r > startR + 5, `10 秒必须明显长大（r ${startR} → ${eater.r.toFixed(1)}）`);
 });
 
 test('AI 速度不超过摇杆满舵', () => {
@@ -976,6 +1006,42 @@ test('相机：每帧 follow(target) 不带死区也不会把镜头锁死（回�
     target.x = 700; // 走出死区
     camera.update();
     assert.ok(camera.xView > 0, `球走出死区后镜头必须移动，实际 xView=${camera.xView}`);
+});
+
+test('相机：视口比世界还大时居中，不会贴到左上角或跑到负坐标', () => {
+    // 回归：旧的 clampView 用"左边超出→贴左"和"右边超出→贴右"两条规则，
+    // 视口大于世界时这两条会互相打架，xView 在负坐标和 0 之间横跳，球偏在屏幕一侧。
+    const worldW = 1000;
+    const worldH = 1000;
+    const camera = new Camera(0, 0, 0, 0, worldW, worldH, 0.35);
+    camera.setViewSize(1400, 1200); // 比世界大
+    const target = ball(worldW / 2, worldH / 2, 10);
+    camera.follow(target);
+    camera.update();
+    assert.ok(camera.xView < 0, '超出部分应该在左（负坐标是允许的）');
+    assert.equal(camera.xView, (worldW - 1400) / 2, '水平必须居中');
+    assert.equal(camera.yView, (worldH - 1200) / 2, '垂直必须居中');
+
+    // 球在边角也要保持居中，不能被拽偏
+    target.x = 10;
+    target.y = 10;
+    camera.update();
+    assert.equal(camera.xView, (worldW - 1400) / 2, '球贴角时仍然居中');
+    assert.equal(camera.yView, (worldH - 1200) / 2);
+});
+
+test('相机：视口比世界小的时候仍然夹在世界内（不能出现负坐标）', () => {
+    const worldW = 1280;
+    const worldH = 1280;
+    const camera = new Camera(0, 0, 0, 0, worldW, worldH, 0.35);
+    camera.setViewSize(800, 600);
+    const target = ball(0, 0, 10); // 球在世界左上角
+    camera.follow(target);
+    camera.update();
+    assert.ok(camera.xView >= 0, `xView 不能为负，实际 ${camera.xView}`);
+    assert.ok(camera.yView >= 0, `yView 不能为负，实际 ${camera.yView}`);
+    assert.ok(camera.xView + camera.wView <= worldW + 1e-6, '右边不能超出');
+    assert.ok(camera.yView + camera.hView <= worldH + 1e-6, '下边不能超出');
 });
 
 test('相机死区：球偏离屏幕中心一小段时镜头就开始跟', () => {

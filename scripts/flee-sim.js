@@ -68,6 +68,10 @@ if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('s
 // 定 WORLD 时必须在这里扫一遍，不能只看成长曲线。
 if (flagValue('worldW') !== undefined) WORLD.width = flagValue('worldW');
 if (flagValue('worldH') !== undefined) WORLD.height = flagValue('worldH');
+// AI 速度：调 AI 觅食平衡时会连带影响逃跑速度，两个仿真必须一起看
+if (flagValue('speedScale') !== undefined) AI.speedScale = flagValue('speedScale');
+if (flagValue('foragePower') !== undefined) AI.foragePower = flagValue('foragePower');
+if (flagValue('thinkInterval') !== undefined) AI.thinkInterval = flagValue('thinkInterval');
 
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;

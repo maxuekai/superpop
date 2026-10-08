@@ -472,8 +472,11 @@ export class Game {
         this.canvas.width = Math.round(cssWidth * dpr);
         this.canvas.height = Math.round(cssHeight * dpr);
 
-        // 保证视口不大于整个世界（否则相机会被钳制出负坐标）
-        this.fitScale = Math.max(cssWidth / this.world.width, cssHeight / this.world.height);
+        // 保证视口不大于整个世界（否则相机会被钳制出负坐标）。
+        // 允许比世界大 VIEW.maxZoomOut 倍：Camera.clampView 在视口超过世界时是"居中"，
+        // 所以露出一点世界外区域也不会让镜头跑到负坐标或左右横跳。
+        // 不放开的话竖屏手机的缩放只活到 r≈12 就死了，"球越大看得越远"从没发生过。
+        this.fitScale = Math.max(cssWidth / this.world.width, cssHeight / this.world.height) / VIEW.maxZoomOut;
         // 注意：这里**不**直接 snap。除了首次布局外都交给 update(dt) 平滑逼近——
         // 手机地址栏收放会高频触发 resize，硬赋值就是"视角突然扩大"的元凶。
         this.updateViewScale(0, !this.viewReady);
