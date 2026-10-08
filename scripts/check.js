@@ -3,7 +3,7 @@
 // 为什么不止语法：这次踩过的坑里，最贵的两个**语法完全合法、npm test 也全绿**，
 // 但结论是错的。语法检查必须配套这两条才够用。
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const roots = ['src', 'server', 'scripts'];
@@ -105,6 +105,26 @@ for (const [file, src] of sources) {
     void classBody;
 }
 
+// ④ 项目级 skill 的 frontmatter 校验：name 必须与目录名一致，description 必须是块标量。
+//    这类文件是给 AI 读的，格式错了不会抛错、只会「看起来配了但没生效」。
+const SKILL_DIR = '.agents/skills';
+if (existsSync(SKILL_DIR)) {
+    for (const name of readdirSync(SKILL_DIR)) {
+        const file = join(SKILL_DIR, name, 'SKILL.md');
+        if (!existsSync(file)) {
+            problems.push(`.agents/skills/${name} 缺 SKILL.md`);
+            continue;
+        }
+        const fm = (/^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(file, 'utf8')) || [])[1] || '';
+        const n = /^name:\s*(.+)$/m.exec(fm);
+        if (!n || n[1].trim() !== name) {
+            problems.push(`${file} 的 name 与目录名不一致（应为 ${name}）`);
+        }
+        if (!/^description:\s*\|/m.test(fm)) {
+            problems.push(`${file} 的 description 必须是块标量（description: | 换行后写内容）`);
+        }
+    }
+}
 if (problems.length > 0) {
     console.error('\nstructural problems:');
     for (const p of problems) {
