@@ -38,6 +38,7 @@ import {
     targetAiCount,
 } from './rules.js';
 import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem, smoothTowards } from './utils.js';
+import { log, logSnapshot } from './log.js';
 
 // 游戏主循环：逻辑按固定步长推进（update），渲染跟随屏幕刷新率（draw）。
 // 状态流转：menu（开局界面，逻辑暂停）→ playing → dead（结算界面，逻辑暂停）→ playing
@@ -256,7 +257,12 @@ export class Game {
         }
 
         // 超编就悄悄收掉最大的那几个（永久移除，不再重生）
-        for (const victim of excessToRemove(alive, target)) {
+        const removed = excessToRemove(alive, target);
+        if (removed.length > 0) {
+            log('数量', `超编永久移除 ${removed.length} 个 AI（不是被吃）：`
+                + removed.map((v) => `${v.name} r=${v.r.toFixed(0)}`).join('、'), 'warn');
+        }
+        for (const victim of removed) {
             victim.alive = false;
             victim.respawnAt = Infinity;
             this.ai = this.ai.filter((ai) => ai !== victim);
@@ -324,6 +330,7 @@ export class Game {
     setDifficulty(level) {
         const preset = DIFFICULTY[level] || DIFFICULTY[DEFAULT_DIFFICULTY];
         this.difficulty = DIFFICULTY[level] ? level : DEFAULT_DIFFICULTY;
+        log('难度', `切换到 ${preset.label}（${this.difficulty}）`);
         for (const key of Object.keys(preset)) {
             if (key === 'label') {
                 continue;
@@ -386,6 +393,7 @@ export class Game {
         this.input.speedX = 0;
         this.input.speedY = 0;
         this.state = 'dead';
+        log('被吃', `最终 ${Math.round(finalMass)}kg，存活 ${this.playTime.toFixed(1)}s`, 'warn');
         this.hud.showSettlement({
             weight: Math.round(finalMass),
             rank: rankOfGroup(finalMass, this.ai),
@@ -403,6 +411,7 @@ export class Game {
         this.input.speedX = 0;
         this.input.speedY = 0;
         this.state = 'crowned';
+        log('称王', `${Math.round(this.playerMass())}kg，存活 ${this.playTime.toFixed(1)}s`, 'warn');
         this.hud.showSettlement({
             weight: Math.round(mass),
             rank: 1,
@@ -434,6 +443,33 @@ export class Game {
         this.camera.follow(this.largestCell());
         this.camera.update();
         this.hud.update(dt, this);
+        this.tickDiagnostics(dt);
+    }
+
+    // 每秒记一次快照 + 帧耗时：出事后回头查日志时，光有"某球消失"是查不出
+    // 它旁边站着谁的，得有一条时间线把当时场上什么情况钉住。
+    // 关着日志时这里只多一次 timer 比较，开销可忽略。
+    tickDiagnostics(dt) {
+        this.frameMs = this.frameMs === undefined ? dt * 1000 : this.frameMs * 0.9 + dt * 1000 * 0.1;
+        this.snapshotTimer = (this.snapshotTimer || 0) + dt;
+        if (this.snapshotTimer < 1) {
+            return;
+        }
+        this.snapshotTimer = 0;
+        let top = 0;
+        for (const ai of this.ai) {
+            if (ai.alive && ai.mass > top) {
+                top = ai.mass;
+            }
+        }
+        logSnapshot(() => ({
+            mass: Math.round(this.playerMass()),
+            rank: this.playerCells.length > 0 ? rankOfGroup(this.playerMass(), this.ai) : '-',
+            alive: this.ai.filter((ai) => ai.alive).length,
+            topAi: Math.round(top),
+            fps: Math.round(1 / dt),
+            frameMs: this.frameMs.toFixed(1),
+        }));
     }
 
     updateWorld(dt) {

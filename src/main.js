@@ -1,13 +1,19 @@
 import { ACTIONS } from './config.js';
 import { Game } from './core/game.js';
+import { initLog, logText } from './core/log.js';
+import { mountLogPanel, startLogPanelTicker } from './core/log-panel.js';
 import { Joystick } from './input/joystick.js';
 import { Keyboard } from './input/keyboard.js';
 import { Hud } from './ui/hud.js';
 
 window.addEventListener('load', () => {
-    // 本地诊断脚手架（src/debug-local.js，已在 .gitignore 里）：文件不存在时静默跳过，
-    // 所以这个 hook 提交上去是安全的。定位完真机问题把那个文件删掉即可。
-    import('./debug-local.js').catch(() => {});
+    // 运行日志：默认关，地址栏加 ?debug=1 打开（?debug=all 连 debug 级快照一起显示）。
+    // 埋点撒在 game.js / ball.js 里，所以关着时几乎没有开销。
+    if (initLog()) {
+        mountLogPanel();
+        startLogPanelTicker();
+        window.__superpopLog = logText;
+    }
 
     const canvas = document.getElementById('ball');
     const hud = new Hud(document);
