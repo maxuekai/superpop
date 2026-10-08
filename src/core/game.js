@@ -294,6 +294,7 @@ export class Game {
             this.playerName = name;
             this.player.name = name;
         }
+        this.restartWorld();
         this.state = 'playing';
         // 保护从真正开局那一刻开始算（菜单界面里世界时间也在走，不能在构造时发）
         this.player.grantShield(PLAYER.spawnShield, this.time);
@@ -302,9 +303,31 @@ export class Game {
         this.hud.hideStart();
     }
 
+    // 重开一局 = 全新一局：AI 全部拉回出生体型、食物重新铺一遍。
+    //
+    // 不重置的话：玩家回到 100kg，而 AI 还留着几百 kg —— 场上每个球都吃得掉玩家、
+    // 玩家却吃不掉任何一个（ai.r > player.r × 1.15 对每个 AI 都成立），
+    // 2.5s 出生保护一过就是必死。实测世界跑 4 分钟后，玩家连续 8 次重生
+    // 分别只活 3/5/7/7/5/6/4/8 秒。「再来一局」在玩家看来应该是新的一局，
+    // 那就得连世界一起重置。
+    //
+    // 顺带解决：syncAiCount 只在"数量超编"时踢人，6 个 AI / 目标 6 个时一个都不踢，
+    // 于是最大的那几个永远留在场上（AI 体型跨玩家死亡保留就是这么来的）。
+    restartWorld() {
+        this.ai = [];
+        this.rebuildBalls();
+        this.spawnAi(this.targetAiCount());
+        this.foodList = [];
+        for (let i = 0; i < FOOD.count; i += 1) {
+            this.foodList.push(this.spawnFood());
+        }
+        this.rebuildBalls();
+    }
+
     // 结算界面「再来一局」
     respawnPlayer(name) {
         this.resetPlayer(name);
+        this.restartWorld();
         this.state = 'playing';
         this.player.grantShield(PLAYER.spawnShield, this.time);
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
