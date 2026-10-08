@@ -1,4 +1,18 @@
-import { AI, COLORS, FOOD, NAMES, PLAYER, PLAYER_OWNER, SPAWN, SPLIT, TICK, VIEW, WORLD } from '../config.js';
+import {
+    AI,
+    COLORS,
+    DEFAULT_DIFFICULTY,
+    DIFFICULTY,
+    FOOD,
+    NAMES,
+    PLAYER,
+    PLAYER_OWNER,
+    SPAWN,
+    SPLIT,
+    TICK,
+    VIEW,
+    WORLD,
+} from '../config.js';
 import { AiPlayer } from './ai.js';
 import { Camera } from './camera.js';
 // 改名导入：原本叫 Map 的话，本文件里就不能再用全局的 Map（会遮蔽）
@@ -289,11 +303,12 @@ export class Game {
     }
 
     // 从开局界面进入游戏
-    begin(name) {
+    begin(name, difficulty) {
         if (name) {
             this.playerName = name;
             this.player.name = name;
         }
+        this.setDifficulty(difficulty);
         this.restartWorld();
         this.state = 'playing';
         // 保护从真正开局那一刻开始算（菜单界面里世界时间也在走，不能在构造时发）
@@ -301,6 +316,25 @@ export class Game {
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
         this.hud.hideStart();
+    }
+
+    // 难度只覆写 AI 的"决策质量"参数，不动速度（理由见 config.DIFFICULTY 注释）。
+    // 必须在 restartWorld() 之前调用：AI 是那时候才批量生成的。
+    // 已经存在的 AI 也要同步——eatBonus 是在构造函数里抓进实例的，改 config 不影响存量球。
+    setDifficulty(level) {
+        const preset = DIFFICULTY[level] || DIFFICULTY[DEFAULT_DIFFICULTY];
+        this.difficulty = DIFFICULTY[level] ? level : DEFAULT_DIFFICULTY;
+        for (const key of Object.keys(preset)) {
+            if (key === 'label') {
+                continue;
+            }
+            AI[key] = preset[key];
+        }
+        for (const ai of this.ai) {
+            ai.eatBonus = AI.eatBonus;
+            ai.foodGain = AI.foodGain;
+        }
+        return this.difficulty;
     }
 
     // 重开一局 = 全新一局：AI 全部拉回出生体型、食物重新铺一遍。

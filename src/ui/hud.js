@@ -1,4 +1,4 @@
-import { HUD, NICKNAME } from '../config.js';
+import { DEFAULT_DIFFICULTY, HUD, NICKNAME } from '../config.js';
 import { formatTime } from '../core/utils.js';
 
 // 页面 UI 层：体重面板、排行榜、开局界面、结算界面。
@@ -38,6 +38,10 @@ export class Hud {
 
         this.menuBtn = root.querySelector('.menu-btn');
 
+        // 难度选择（开局界面）：纯 UI 状态，点哪个把哪个传给游戏
+        this.diffBtns = [...root.querySelectorAll('.diff-btn')];
+        this.difficulty = DEFAULT_DIFFICULTY;
+
         this.refreshTimer = 0;
         this.lastWeight = -1;
         this.lastBoard = '';
@@ -52,9 +56,13 @@ export class Hud {
     // ---------- 事件绑定 ----------
 
     onStart(handler) {
+        for (const btn of this.diffBtns) {
+            btn.addEventListener('click', () => this.pickDifficulty(btn.dataset.diff));
+        }
+        this.syncDifficulty();
         const fire = () => {
             this.releaseFocus();
-            handler(this.readName(this.startInput));
+            handler(this.readName(this.startInput), this.difficulty);
         };
         if (this.startBtn) {
             this.startBtn.addEventListener('click', fire);
@@ -65,6 +73,17 @@ export class Hud {
                     fire();
                 }
             });
+        }
+    }
+
+    pickDifficulty(level) {
+        this.difficulty = level;
+        this.syncDifficulty();
+    }
+
+    syncDifficulty() {
+        for (const btn of this.diffBtns) {
+            btn.classList.toggle('active', btn.dataset.diff === this.difficulty);
         }
     }
 

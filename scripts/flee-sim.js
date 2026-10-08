@@ -72,6 +72,18 @@ if (flagValue('worldH') !== undefined) WORLD.height = flagValue('worldH');
 if (flagValue('speedScale') !== undefined) AI.speedScale = flagValue('speedScale');
 if (flagValue('foragePower') !== undefined) AI.foragePower = flagValue('foragePower');
 if (flagValue('thinkInterval') !== undefined) AI.thinkInterval = flagValue('thinkInterval');
+if (flagValue('escapeSamples') !== undefined) AI.escapeSamples = flagValue('escapeSamples');
+if (flagValue('escapeChange') !== undefined) AI.escapeChange = flagValue('escapeChange');
+if (flagValue('chaseRange') !== undefined) AI.chaseRange = flagValue('chaseRange');
+// 下面这几个除了 flag 之外还能走位置参数。批量调参时一律用 flag，避开位置参数的坑：
+// 位置参数是「既不是 flag、也不是某个 flag 的值」的数字，所以
+// `flee-sim --thinkInterval 0.1 ... 0.1 90` 里那个 0.1 会被当成 flag 的值剔掉，
+// 后面的 90 就顶到了 escapeFoodWeight 的位置——整组数据作废（已在 tuning.md 记过）。
+if (flagValue('fleeRange') !== undefined) AI.fleeRange = flagValue('fleeRange');
+if (flagValue('escapeProbe') !== undefined) AI.escapeProbe = flagValue('escapeProbe');
+if (flagValue('escapeWallWeight') !== undefined) AI.escapeWallWeight = flagValue('escapeWallWeight');
+if (flagValue('escapeFoodWeight') !== undefined) AI.escapeFoodWeight = flagValue('escapeFoodWeight');
+if (flagValue('escapeFoodRange') !== undefined) AI.escapeFoodRange = flagValue('escapeFoodRange');
 
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;

@@ -114,6 +114,63 @@ export const PLAYER = {
 // 光看质量不够——必须同时是第一名，否则一堆小号互相喂分也能刷到。
 export const KING = { mass: 30000 };
 
+// 难度档位：只调「决策质量」，**不动速度**。
+//
+// 为什么不动速度：`AI.speedScale` 从 0.92 提到 1.05，被吃率会从 20/20 崩到 4/20
+// （AI 快到根本抓不到，"吃人"这个玩法就没了）。速度一档动，两个目标就对立了。
+// 难度改成调：反应快慢、逃跑方向算得准不准（候选方向数/探测距离）、
+// 会不会主动围猎（追击距离与提前量）、会不会乱改主意（escapeChange）。
+//
+// ⚠ 这些参数互相牵扯，不能凭直觉配，要用 `npm run sim` / `npm run sim:food`
+// 实测每档的「被吃率」和「AI 成长速度」再定。已知的反直觉例子：
+// fleeRange 调高反而让 AI 更好抓（14/20 → 17/20 → 19/20）——
+// 早开跑的 AI 会一路跑到墙角，escapeSamples 给到 24 也救不回来。
+export const DIFFICULTY = {
+    easy: {
+        label: '简单',
+        // 见 AI 的同名字段；这里是"覆写值"，没写的沿用 AI 的默认值
+        fleeRange: 130,
+        thinkInterval: 0.25,
+        escapeSamples: 8,
+        escapeProbe: 150,
+        chaseRange: 300,
+        chaseLead: 0,
+        escapeChange: 0.5,
+        foodGain: 0.26,
+        minCount: 5,
+        count: 9,
+    },
+    normal: {
+        label: '普通',
+        fleeRange: 160,
+        thinkInterval: 0.1,
+        escapeSamples: 16,
+        escapeProbe: 180,
+        chaseRange: 560,
+        chaseLead: 0.25,
+        escapeChange: 0.25,
+        foodGain: 0.3,
+        minCount: 6,
+        count: 12,
+    },
+    hard: {
+        label: '困难',
+        fleeRange: 175,
+        thinkInterval: 0.06,
+        escapeSamples: 24,
+        escapeProbe: 230,
+        chaseRange: 820,
+        chaseLead: 0.45,
+        escapeChange: 0.12,
+        foodGain: 0.34,
+        minCount: 7,
+        count: 14,
+    },
+};
+
+// 默认难度
+export const DEFAULT_DIFFICULTY = 'normal';
+
 // 互吃规则：质量按 r² 计（体重面板也是 r²）
 export const EAT = {
     // 半径比阈值：只有大于对方 ratio 倍才吃得掉，避免势均力敌时反复互吞

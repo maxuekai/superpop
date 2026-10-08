@@ -37,6 +37,9 @@ if (flagValue('foodGain') !== undefined) AI.foodGain = flagValue('foodGain');
 if (flagValue('thinkInterval') !== undefined) AI.thinkInterval = flagValue('thinkInterval');
 if (flagValue('chaseRange') !== undefined) AI.chaseRange = flagValue('chaseRange');
 if (flagValue('escapeFoodRange') !== undefined) AI.escapeFoodRange = flagValue('escapeFoodRange');
+if (flagValue('fleeRange') !== undefined) AI.fleeRange = flagValue('fleeRange');
+if (flagValue('escapeProbe') !== undefined) AI.escapeProbe = flagValue('escapeProbe');
+if (flagValue('escapeChange') !== undefined) AI.escapeChange = flagValue('escapeChange');
 if (flagValue('speedScale') !== undefined) AI.speedScale = flagValue('speedScale');
 // AI 觅食时还有一层额外减速（config.AI.foragePower，原为硬编码 0.95），
 // 和 speedScale 叠起来是 0.874 倍满舵——比玩家慢 12.6%。--foragePower=1 可以关掉它。

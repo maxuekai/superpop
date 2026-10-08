@@ -196,6 +196,32 @@ body {
 }
 
 /* 已达分身上限：仍然显示，但明说原因，不让按钮无声消失 */
+/* 难度选择：三档，选中态要一眼看得出来（跟分裂按钮同一个道理，
+   状态不明会让玩家以为自己没点上） */
+.difficulty {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 14px;
+}
+
+.diff-btn {
+    flex: 1;
+    padding: 9px 0;
+    border: none;
+    border-radius: 12px;
+
+    font-family: inherit;
+    font-size: 14px;
+    color: #cfe9e2;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.diff-btn.active {
+    color: #06231f;
+    font-weight: 600;
+    background-color: rgba(110, 231, 195, 0.9);
+}
+
 .division.blocked {
     color: #cfe9e2;
     background-color: rgba(255, 255, 255, 0.12);
