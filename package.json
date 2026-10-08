@@ -8,8 +8,10 @@
     "dev": "node server/dev-server.js",
     "server": "node server/index.js",
     "test": "node scripts/check.js && node scripts/rules-test.js",
+    "verify": "node scripts/check.js && node scripts/rules-test.js && node scripts/invariants.js && node scripts/flee-sim.js && node scripts/food-sim.js --trials 8",
     "sim": "node scripts/flee-sim.js",
-    "sim:food": "node scripts/food-sim.js"
+    "sim:food": "node scripts/food-sim.js",
+    "invariants": "node scripts/invariants.js"
   },
   "keywords": [
     "游戏",

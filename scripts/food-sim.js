@@ -3,6 +3,7 @@
 //          ② 觅食仿真（玩家球 vs AI 球各跑 30 秒，看谁吃得多、长得多）
 // 用途：调 FOOD.count / radius / cluster、PLAYER.growthPerFood、AI.foodGain 之前先跑它。
 import { AI, FOOD, JOYSTICK, PLAYER, WORLD } from '../src/config.js';
+import { parseArgs } from './args.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { distance, randomFloat } from '../src/core/utils.js';
@@ -17,17 +18,16 @@ Math.random = () => {
     return rngSeed / 2147483648;
 };
 
-// 命令行覆盖：--divisor / --speedUnit / --playerGain / --foodGain
-const args = process.argv.slice(2);
-const flagValue = (name) => {
-    const hit = args.find((a) => a === `--${name}` || a.startsWith(`--${name}=`));
-    if (!hit) {
-        return undefined;
-    }
-    const raw = hit.includes('=') ? hit.split('=')[1] : args[args.indexOf(hit) + 1];
-    const num = Number(raw);
-    return Number.isFinite(num) ? num : undefined;
-};
+// 解析交给 scripts/args.js：撞值 / 参数过多 / 未知 flag 都会明确报错，不会静默串位
+const cli = parseArgs(process.argv.slice(2), {
+    positional: [],
+    flags: [
+        'divisor', 'slowdown', 'playerGain', 'foodGain', 'trials',
+        'thinkInterval', 'chaseRange', 'escapeFoodRange', 'fleeRange', 'escapeProbe',
+        'escapeChange', 'escapeSamples', 'speedScale', 'foragePower',
+    ],
+});
+const flagValue = cli.flag;
 if (flagValue('divisor') !== undefined) PLAYER.speedDivisor = flagValue('divisor');
 if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('slowdown');
 if (flagValue('playerGain') !== undefined) PLAYER.growthPerFood = flagValue('playerGain');

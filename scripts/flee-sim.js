@@ -1,4 +1,4 @@
-﻿// AI 逃跑能力仿真：模拟「一个满舵直线追击的猎手」追若干 AI，统计存活时间与被逼墙次数。
+// AI 逃跑能力仿真：模拟「一个满舵直线追击的猎手」追若干 AI，统计存活时间与被逼墙次数。
 // 用途：调 AI 难度/逃跑参数（config.js 的 AI.escape*、fleeRange 等）时，先在这里看整体效果，
 // 比在手机上反复试省事。无 DOM，直接 `npm run sim` 运行。
 //
@@ -9,6 +9,7 @@
 //   npm run sim -- --sweep             扫猎手半径 10~50，看「大球到底能不能追上」（见下方闭环速度对照）
 //   npm run sim -- --hunter 30 --prey 15   指定猎手半径与猎物半径
 import { AI, JOYSTICK, PLAYER, WORLD as WORLD_CONFIG } from '../src/config.js';
+import { parseArgs } from './args.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { resolveOverlaps } from '../src/core/rules.js';
@@ -30,38 +31,18 @@ Math.random = () => {
 };
 
 // ---------- 命令行参数 ----------
-
-const args = process.argv.slice(2);
-// 位置参数 = 既不是 flag、也不是某个 flag 的值 的数字。
-// 注意：`--divisor 60` 里的 60 是 flag 的值，不能再被当成位置参数（否则会顺手改掉 fleeRange）。
-const flagValues = new Set();
-for (let i = 0; i < args.length; i += 1) {
-    if (args[i].startsWith('--') && !args[i].includes('=')) {
-        flagValues.add(args[i + 1]);
-    }
-}
-const flags = args.filter((a) => a.startsWith('--'));
-const positional = args
-    .filter((a) => !a.startsWith('--') && !flagValues.has(a))
-    .map(Number)
-    .filter((n) => Number.isFinite(n));
-const flagValue = (name) => {
-    const hit = flags.find((f) => f === `--${name}` || f.startsWith(`--${name}=`));
-    if (!hit) {
-        return undefined;
-    }
-    const value = hit.includes('=') ? hit.split('=')[1] : args[args.indexOf(hit) + 1];
-    const num = Number(value);
-    return Number.isFinite(num) ? num : undefined;
-};
-
-// 位置参数覆盖 config（脚本跑完即结束，不影响游戏本体）
-if (positional.length >= 1) AI.fleeRange = positional[0];
-if (positional.length >= 2) AI.escapeProbe = positional[1];
-if (positional.length >= 3) AI.escapeWallWeight = positional[2];
-if (positional.length >= 4) AI.escapeFoodWeight = positional[3];
-if (positional.length >= 5) AI.escapeFoodRange = positional[4];
-// 速度相关（和 food-sim 用同一套公式，方便两边对照）
+// 解析交给 scripts/args.js：它会在"flag 的值和位置参数撞值"时直接报错，
+// 而不是像旧解析器那样静默串位（旧解析器把 escapeFoodWeight 赋成 90，整组数据作废）。
+const cli = parseArgs(process.argv.slice(2), {
+    positional: ['fleeRange', 'escapeProbe', 'escapeWallWeight', 'escapeFoodWeight', 'escapeFoodRange'],
+    flags: [
+        'divisor', 'slowdown', 'hunter', 'prey', 'sweep', 'nofood', 'trials',
+        'worldW', 'worldH',
+        'speedScale', 'foragePower', 'thinkInterval', 'escapeSamples', 'escapeChange', 'chaseRange',
+        'fleeRange', 'escapeProbe', 'escapeWallWeight', 'escapeFoodWeight', 'escapeFoodRange',
+    ],
+});
+const flagValue = cli.flag;
 if (flagValue('divisor') !== undefined) PLAYER.speedDivisor = flagValue('divisor');
 if (flagValue('slowdown') !== undefined) PLAYER.slowdownPerRadius = flagValue('slowdown');
 // 世界尺寸覆盖：地图放大直接改变"能不能追上"（AI 有更多地方躲），
@@ -88,9 +69,9 @@ if (flagValue('escapeFoodRange') !== undefined) AI.escapeFoodRange = flagValue('
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;
 const PREY_R = flagValue('prey') ?? PLAYER.radius;
-const SWEEP = flags.includes('--sweep');
+const SWEEP = process.argv.includes('--sweep');
 // --nofood：猎物不吃食物（不长大）。用来把「速度不对称」和「猎物越逃越大越慢」两种因素分开
-const PREY_GROWS = !flags.includes('--nofood');
+const PREY_GROWS = !process.argv.includes('--nofood');
 
 // 与 Ball.update 同一套公式的解析速度（世界单位/秒），用来和仿真结果互相印证
 function speedOf(r, throttle) {
