@@ -1,4 +1,10 @@
-import { JOYSTICK } from '../config.js';
+import { JOYSTICK, WORLD } from '../config.js';
+
+// 单球半径上限。必须在**每一条增长路径**上都过一遍（吃食物、吃球），
+// 否则总有一条能把球推到比世界还大，而那种球会被边界钳制钉在界外、永远看不见。
+export function capRadius(r) {
+    return Math.min(r, WORLD.maxBallRadius);
+}
 
 export function distance(x1, y1, x2, y2) {
     return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));

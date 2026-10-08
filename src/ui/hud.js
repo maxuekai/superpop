@@ -118,10 +118,10 @@ export class Hud {
     }
 
     // 分裂按钮的可用态与冷却文案。
-    // 只有「真能分裂」时才显示可点状态——以前这个按钮一直摆在那儿，
-    // 玩家按了没反应又容易误触，才被移除；现在长到阈值才亮。
     // 冷却期间必须真的 disabled：只改样式的话按钮照样能点，点下去 requestSplit
     // 直接 return false，玩家只会看到"按了没反应"，分不清是冷却还是没到门槛。
+    // 分身数达上限时也不能无声消失——那是唯一一个玩家从画面上看不出原因的禁用态，
+    // 显示成"已达上限"。
     updateSplit(state) {
         if (!this.splitBtn) {
             return;
@@ -129,10 +129,16 @@ export class Hud {
         const cooling = state.cooldownLeft > 0.05;
         this.splitBtn.classList.toggle('ready', state.canSplit);
         this.splitBtn.classList.toggle('cooling', !state.canSplit && cooling);
-        this.splitBtn.classList.toggle('hidden', !state.canSplit && !cooling);
+        this.splitBtn.classList.toggle('blocked', !state.canSplit && state.atCellLimit);
+        this.splitBtn.classList.toggle(
+            'hidden',
+            !state.canSplit && !cooling && !state.atCellLimit,
+        );
         this.splitBtn.disabled = !state.canSplit;
         if (this.splitLabel) {
-            const label = state.canSplit ? '分裂' : `${Math.ceil(state.cooldownLeft)}s`;
+            const label = state.canSplit ? '分裂'
+                : state.atCellLimit ? '已达上限'
+                    : `${Math.ceil(state.cooldownLeft)}s`;
             if (label !== this.lastSplitLabel) {
                 this.lastSplitLabel = label;
                 this.splitLabel.textContent = label;

@@ -1,4 +1,4 @@
-﻿// 玩法规则检查（无 DOM）：吃食物判定、大小互吃规则、质量吸收、AI 决策方向、速度随体型衰减。
+// 玩法规则检查（无 DOM）：吃食物判定、大小互吃规则、质量吸收、AI 决策方向、速度随体型衰减。
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
@@ -23,6 +23,7 @@ import {
     resolveFoodEating,
     resolveOverlaps,
     splitCells,
+    splitStatus,
     targetAiCount,
 } from '../src/core/rules.js';
 import { clusterOffset, randomFloat, smoothTowards } from '../src/core/utils.js';
@@ -83,6 +84,41 @@ test('canEatBall：擦边而过不会被吃（两圆不重叠就不吃）', () =
     assert.equal(big.canEatBall(small), true, '31.9 < 32，已经碰到了');
     const graze = ball(400, 384 + 32.1, 10, '擦过');
     assert.equal(big.canEatBall(graze), false, '32.1 > 32，没碰到');
+});
+
+test('半径上限：吃人和吃食物都撞不破天花板（否则球会比世界还大、被钉在界外）', () => {
+    const world = { width: WORLD.width, height: WORLD.height };
+    const cap = WORLD.maxBallRadius;
+    assert.ok(cap * 2 <= Math.min(WORLD.width, WORLD.height),
+        `半径上限 ${cap} 必须让球完全放得进世界（直径 ${cap * 2} ≤ ${Math.min(WORLD.width, WORLD.height)}）`);
+
+    // 增长路径一：吃人（增长最快的一条）
+    const eater = ball(0, 0, cap);
+    for (let i = 0; i < 20; i += 1) {
+        eater.absorb(ball(0, 0, cap), 1.3);
+    }
+    assert.ok(eater.r <= cap, `吃人后半径必须仍 ≤ ${cap}，实际 ${eater.r}`);
+
+    // 增长路径二：吃食物
+    const eater2 = ball(0, 0, cap);
+    const foodList = [];
+    for (let i = 0; i < 50; i += 1) {
+        foodList.push({ x: eater2.x, y: eater2.y });
+    }
+    resolveFoodEating(foodList, [eater2], () => ({ x: 9999, y: 9999 }));
+    assert.ok(eater2.r <= cap, `吃食物后半径必须仍 ≤ ${cap}，实际 ${eater2.r}`);
+
+    // 增长路径三：分身合并（两个都贴天花板时并起来是 √2 倍）
+    const m1 = makeCell(0, 0, WORLD.maxBallRadius, 'me');
+    const m2 = makeCell(10, 0, WORLD.maxBallRadius, 'me2');
+    mergeCells([m1, m2], 100);
+    assert.ok(m1.r <= WORLD.maxBallRadius,
+        `合并后半径必须仍 ≤ ${WORLD.maxBallRadius}，实际 ${m1.r}`);
+
+    // 撞上天花板之后球心仍然在世界内，不会被边界钳制推到界外
+    eater.update(STEP, world);
+    assert.ok(eater.x >= 0 && eater.x <= WORLD.width && eater.y >= 0 && eater.y <= WORLD.height,
+        `球必须还在世界里，实际 (${eater.x.toFixed(1)}, ${eater.y.toFixed(1)})`);
 });
 
 test('absorb：质量按 r² 累加后开方', () => {
@@ -789,6 +825,32 @@ test('能不能分裂：够大 + 冷却结束 + 不超上限', () => {
         many.push(makeCell(i * 100, 0, 30, 'me'));
     }
     assert.equal(canSplit(many, 100, 0), false, '超过细胞数上限就不能再分');
+});
+
+test('分裂按钮状态：达上限要能说得出原因，不能无声消失', () => {
+    // 回归：以前 canSplit 一 false、冷却又过了，按钮就直接 .hidden。
+    // 分身数满的时候玩家从画面上看不出任何"为什么不能分"，只会觉得按钮不见了。
+    const one = [makeCell(0, 0, 30, 'me')];
+    const ok = splitStatus(one, 100, 0);
+    assert.equal(ok.canSplit, true, '够大就���分');
+    assert.equal(ok.atCellLimit, false);
+
+    const cooling = splitStatus(one, 100, 99);
+    assert.equal(cooling.canSplit, false, '冷却中不能分');
+    assert.equal(cooling.cooling, true, '要能区分"在冷却"');
+    assert.equal(cooling.atCellLimit, false, '冷却不是上限');
+
+    const full = [];
+    for (let i = 0; i < SPLIT.maxCells; i += 1) full.push(makeCell(i * 100, 0, 30, 'me'));
+    const capped = splitStatus(full, 100, 0);
+    assert.equal(capped.canSplit, false);
+    assert.equal(capped.atCellLimit, true, '达上限必须能被识别出来（HUD 据此显示"已达上限"）');
+    assert.equal(capped.cooling, false, '上限和冷却是两回事');
+
+    const tiny = [makeCell(0, 0, 5, 'me')];
+    const small = splitStatus(tiny, 100, 0);
+    assert.equal(small.canSplit, false);
+    assert.equal(small.atCellLimit, false, '球太小不算达上限（球的大小看得见，不需要解释）');
 });
 
 test('合并：同一 owner 的细胞靠拢后并回一个（质量守恒）', () => {

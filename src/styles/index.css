@@ -195,6 +195,12 @@ body {
     }
 }
 
+/* 已达分身上限：仍然显示，但明说原因，不让按钮无声消失 */
+.division.blocked {
+    color: #cfe9e2;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
 .division.cooling {
     color: #cfe9e2;
     background-color: rgba(255, 255, 255, 0.16);

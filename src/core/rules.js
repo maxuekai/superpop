@@ -1,5 +1,5 @@
 import { AI, HUD, KING, PLAYER, SPLIT } from '../config.js';
-import { clamp, distance } from './utils.js';
+import { clamp, capRadius, distance } from './utils.js';
 
 // 玩法裁定层：把「一帧内发生什么」写成纯函数，不碰 canvas / DOM，
 // 这样 scripts/rules-test.js 能直接在 node 里测整局流程，而不用起浏览器。
@@ -63,7 +63,8 @@ export function resolveFoodEating(foodList, balls, makeFood) {
             }
         }
         if (eater) {
-            eater.r += eater.foodGain;
+            // 半径要走上限：吃食物是另一条增长路径，漏了它就能绕过 absorb() 的钳制
+            eater.r = capRadius(eater.r + eater.foodGain);
             eater.onEat();
             eaten.set(eater, (eaten.get(eater) || 0) + 1);
             kept.push(makeFood());
@@ -85,6 +86,22 @@ export function rankOfGroup(mass, others) {
         }
     }
     return rank;
+}
+
+// 分裂按钮该显示什么：能不能分、冷却还剩几秒、**以及为什么不能分**。
+// reason 必须区分出来：只给 canSplit 的话，"已达分身上限"和"球还太小"都会让按钮
+// 无声消失，玩家看到的就是"按钮不见了"——和最初的"按了没反应"是同一种体验。
+// 规则放这里而不是 Game 里，是为了能单测（core 不碰 DOM）。
+export function splitStatus(cells, now, lastSplitAt) {
+    const cooldownLeft = Math.max(0, SPLIT.cooldown - (now - lastSplitAt));
+    const cooling = cooldownLeft > 0.05;
+    const atCellLimit = cells.length >= SPLIT.maxCells;
+    return {
+        canSplit: canSplit(cells, now, lastSplitAt),
+        cooldownLeft,
+        cooling,
+        atCellLimit,
+    };
 }
 
 // 排行榜：玩家按整组质量算一条，AI 每个球一条，降序取前 N。
@@ -235,7 +252,9 @@ export function mergeCells(cells, now) {
             && now >= Math.max(other.mergeAfter, cell.mergeAfter)
             && distance(other.x, other.y, cell.x, cell.y) < (other.r + cell.r) * SPLIT.mergeFactor);
         if (partner) {
-            partner.r = Math.sqrt(partner.mass + cell.mass);
+            // 合并也要过上限：两个都贴着天花板的分身并起来会是 √2 倍，
+            // 这条路径不 clamp 就能绕过 absorb() / 吃食物 的钳制
+            partner.r = capRadius(Math.sqrt(partner.mass + cell.mass));
             partner.mergeAfter = now;
             merged += 1;
             continue;

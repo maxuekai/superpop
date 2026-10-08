@@ -1,5 +1,5 @@
 import { EAT, FOOD, PLAYER, SPLIT } from '../config.js';
-import { distance, shadeColor } from './utils.js';
+import { distance, capRadius, shadeColor } from './utils.js';
 
 // 所有小球（玩家和 AI）的共同基类：移动、边界钳制、视觉回弹、进食与互吃判定、绘制。
 // 球本身不产生速度：speedX/speedY 由外部写入（摇杆写玩家，AI 决策写自己），
@@ -147,8 +147,9 @@ export class Ball {
 
     // 吸收对方质量：质量按 r² 累加后再开方回半径。
     // bonus 是「吃人收益倍率」，AI 会用它让互吃长得更明显（默认 1）。
+    // 结果要过半径上限——互吃是增长最快的一条路径（吃掉同尺寸的球 r 直接 ×1.45）。
     absorb(other, bonus = 1) {
-        this.r = Math.sqrt(this.mass + other.mass * EAT.absorb * bonus);
+        this.r = capRadius(Math.sqrt(this.mass + other.mass * EAT.absorb * bonus));
         this.onEat();
     }
 

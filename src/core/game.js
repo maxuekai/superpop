@@ -20,6 +20,7 @@ import {
     resolveFoodEating,
     resolveOverlaps,
     splitCells,
+    splitStatus,
     targetAiCount,
 } from './rules.js';
 import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem, smoothTowards } from './utils.js';
@@ -105,10 +106,16 @@ export class Game {
         this.balls = [...this.playerCells.filter((cell) => cell.alive), ...this.ai];
     }
 
-    // 分裂状态：给 HUD（按钮是否可点、冷却还剩几秒）
+    // 分裂状态：给 HUD（按钮是否可点、冷却还剩几秒、为什么不能点）。
+    // 判定本身在 rules.splitStatus（纯函数、可单测），这里只补上"是否在局内"这一层。
     splitState() {
-        const can = this.state === 'playing' && canSplit(this.playerCells, this.time, this.lastSplitAt);
-        return { canSplit: can, cooldownLeft: Math.max(0, SPLIT.cooldown - (this.time - this.lastSplitAt)) };
+        const status = splitStatus(this.playerCells, this.time, this.lastSplitAt);
+        const playing = this.state === 'playing';
+        return {
+            canSplit: playing && status.canSplit,
+            cooldownLeft: status.cooldownLeft,
+            atCellLimit: playing && status.atCellLimit,
+        };
     }
 
     requestSplit() {
