@@ -13,11 +13,19 @@ window.addEventListener('load', () => {
         mountLogPanel();
         startLogPanelTicker();
         window.__superpopLog = logText;
+        // 调试钩子：无头/自动化测试用（后台标签页的 requestAnimationFrame 会被浏览器
+        // 节流到不触发，世界冻住没法测）。只在 ?debug=1 下暴露，生产路径不碰。
+        window.__exposeGame = (game) => {
+            window.__game = game;
+        };
     }
 
     const canvas = document.getElementById('ball');
     const hud = new Hud(document);
     const game = new Game(canvas, hud);
+    if (typeof window.__exposeGame === 'function') {
+        window.__exposeGame(game);
+    }
 
     // 摇杆和键盘都往 game.input 写方向，再由 Game 同步给每一个分身
     const controlPanel = document.querySelector('.control-panel');

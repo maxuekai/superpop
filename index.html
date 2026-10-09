@@ -27,6 +27,9 @@
         </button>
         <canvas id="ball" width="667" height="375"></canvas>
 
+        <!-- 被吃瞬间的红闪演出层：纯视觉、不拦交互（结算弹层 z-index 更高，盖在它上面） -->
+        <div class="death-flash" aria-hidden="true"></div>
+
         <!-- 开局界面：ui-interactive 让摇杆不抢这些触摸 -->
         <div class="overlay ui-interactive start-overlay">
             <div class="dialog">

@@ -257,6 +257,44 @@ body {
     z-index: 10;
 }
 
+/* 被吃瞬间的红闪：边缘泛红的暗角，一次性动画自己淡出（fill forwards 终态 opacity 0）。
+   z-index 压在弹层(10)之下——结算弹出时红闪必须已经/正在消失，别盖住结算数字。
+   动画时长 1.5s > DEATH.cueSeconds(0.8s)：弹结算时红闪还在收尾，过渡更自然。 */
+.death-flash {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(255, 60, 60, 0) 38%,
+            rgba(255, 45, 45, 0.55) 100%);
+    opacity: 0;
+}
+
+.death-flash.active {
+    animation: death-pulse 1.5s ease-out forwards;
+}
+
+@keyframes death-pulse {
+    0% {
+        opacity: 0;
+    }
+
+    12% {
+        opacity: 1;
+    }
+
+    55% {
+        opacity: 0.85;
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
 .overlay.hidden {
     display: none;
 }

@@ -31,6 +31,7 @@ export class Hud {
         this.settleTimeEl = root.querySelector('.final-time');
         this.settleTitleEl = root.querySelector('.settle-title');
         this.settleDetailEl = root.querySelector('.final-detail');
+        this.deathFlashEl = root.querySelector('.death-flash');
 
         this.splitBtn = root.querySelector('.division');
         this.splitLabel = root.querySelector('.division-label');
@@ -223,6 +224,18 @@ export class Hud {
     }
 
     // ---------- 弹层 ----------
+
+    // 被吃瞬间的红闪（配合 Game 的 dying 慢放演出）。
+    // 连续死亡两次时 CSS 动画不会自动重播：先摘 class、强制一次回流（读 offsetWidth）、
+    // 再戴上，动画才会从头跑——这是重启 CSS 动画的标准写法。
+    showDeathFlash() {
+        if (!this.deathFlashEl) {
+            return;
+        }
+        this.deathFlashEl.classList.remove('active');
+        void this.deathFlashEl.offsetWidth;
+        this.deathFlashEl.classList.add('active');
+    }
 
     hideStart() {
         if (this.startOverlay) {

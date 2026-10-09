@@ -2,6 +2,7 @@ import {
     AI,
     COLORS,
     DEFAULT_DIFFICULTY,
+    DEATH,
     DIFFICULTY,
     FOOD,
     NAMES,
@@ -41,7 +42,8 @@ import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem, smo
 import { log, logSnapshot } from './log.js';
 
 // 游戏主循环：逻辑按固定步长推进（update），渲染跟随屏幕刷新率（draw）。
-// 状态流转：menu（开局界面，逻辑暂停）→ playing → dead（结算界面，逻辑暂停）→ playing
+// 状态流转：menu（开局界面，逻辑暂停）→ playing → dying（被吃演出：世界慢放+红闪）
+//          → dead（结算界面，逻辑暂停）→ playing；playing → crowned（称王结算）
 export class Game {
     constructor(canvas, hud) {
         this.canvas = canvas;
@@ -79,6 +81,8 @@ export class Game {
         this.lastTime = 0;
         this.syncTimer = 0;
         this.lastSplitAt = -Infinity;
+        this.dyingTimer = 0; // >0 时处于死亡演出（dying）倒计时
+        this.settlementStats = null; // 死亡瞬间的结算数据，演出结束后才展示
 
         // 输入层：摇杆/键盘写这里，再同步给每一个玩家分身
         // （分身不是一个球，共享同一个方向；不共用对象的话输入只会作用在其中一个上）
@@ -389,12 +393,16 @@ export class Game {
 
     // 整组玩家细胞都被吃光才算死。finalMass 要传「死亡瞬间」的质量：
     // 走到这里时细胞已经被移出数组，playerMass() 已经是 0，结算会显示成 0kg。
+    // 死亡不立刻弹结算：先进 'dying' 演出（世界慢放 + 红闪），让玩家看清
+    // "是谁、在哪里吃掉了我"，播完由 finishDeath 弹结算。数据在死亡瞬间定格。
     onPlayerEaten(finalMass) {
         this.input.speedX = 0;
         this.input.speedY = 0;
-        this.state = 'dead';
+        this.state = 'dying';
+        this.dyingTimer = DEATH.cueSeconds;
         log('被吃', `最终 ${Math.round(finalMass)}kg，存活 ${this.playTime.toFixed(1)}s`, 'warn');
-        this.hud.showSettlement({
+        this.hud.showDeathFlash();
+        this.settlementStats = {
             weight: Math.round(finalMass),
             rank: rankOfGroup(finalMass, this.ai),
             time: this.playTime,
@@ -402,7 +410,13 @@ export class Game {
             kills: this.kills,
             name: this.playerName,
             crowned: false,
-        });
+        };
+    }
+
+    // 死亡演出结束：此刻才冻结世界、弹结算层
+    finishDeath() {
+        this.state = 'dead';
+        this.hud.showSettlement(this.settlementStats);
     }
 
     // 称王：单局的终点（质量达标 + 当前第一），与死亡一样把世界冻住。
@@ -431,9 +445,19 @@ export class Game {
     // ---------- 逻辑更新 ----------
 
     update(dt) {
-        this.time += dt;
         if (this.state === 'playing') {
+            this.time += dt;
             this.updateWorld(dt);
+        } else if (this.state === 'dying') {
+            // 死亡演出：世界按 DEATH.slowMoScale 慢放（this.time 跟着世界走，
+            // 否则 AI 重生倒计时会相对世界提前），演出计时用真实秒。
+            const scaled = dt * DEATH.slowMoScale;
+            this.time += scaled;
+            this.updateWorld(scaled);
+            this.dyingTimer -= dt;
+            if (this.dyingTimer <= 0) {
+                this.finishDeath();
+            }
         }
         // 出生保护标记：给 draw 画光环用
         for (const ball of this.balls) {
