@@ -25,19 +25,35 @@ function runSim(script, args) {
 }
 
 // 一律用 flag 展开，不走位置参数（位置参数会把 flag 的值也吃进去，见 flee-sim 里的注释）
+// ⚠ 两个脚本支持的 flag 不是同一套：food-sim 没有 escapeWallWeight / escapeFoodWeight
+// （它测的是觅食，猎物不逃跑）。给 food-sim 传它不认识的 flag 会整行报错、
+// 表格里只剩 "?"——曾经就这么静默失效过一轮，别再共享同一份参数表。
+const FLEE_ONLY_FLAGS = new Set(['escapeWallWeight', 'escapeFoodWeight']);
+
 function argsFor(level) {
     const p = DIFFICULTY[level];
-    return [
-        '--thinkInterval', String(p.thinkInterval),
-        '--escapeSamples', String(p.escapeSamples),
-        '--escapeChange', String(p.escapeChange),
-        '--fleeRange', String(p.fleeRange),
-        '--escapeProbe', String(p.escapeProbe),
-        '--escapeWallWeight', '1',
-        '--escapeFoodWeight', '0.1',
-        '--escapeFoodRange', '90',
-        '--chaseRange', String(p.chaseRange),
+    const pairs = [
+        ['thinkInterval', String(p.thinkInterval)],
+        ['escapeSamples', String(p.escapeSamples)],
+        ['escapeChange', String(p.escapeChange)],
+        ['fleeRange', String(p.fleeRange)],
+        ['escapeProbe', String(p.escapeProbe)],
+        ['escapeWallWeight', '1'],
+        ['escapeFoodWeight', '0.1'],
+        ['escapeFoodRange', '90'],
+        ['chaseRange', String(p.chaseRange)],
     ];
+    const pick = (allowed) => pairs
+        .filter(([name]) => allowed(name))
+        // 必须用 --名字=值 的粘连写法：分开写时，两个 flag 恰好同值
+        // （如 normal 档 thinkInterval 0.1 与 escapeFoodWeight 0.1）会触发
+        // args.js 的撞值护栏整行报错——difficulty-report 从写出来那天起
+        // easy/normal 两行就一直是 "?"，没人发现。
+        .map(([name, value]) => `--${name}=${value}`);
+    return {
+        flee: pick(() => true),
+        food: pick((name) => !FLEE_ONLY_FLAGS.has(name)),
+    };
 }
 
 console.log('难度档位实测对照（速度参数三档相同，只变决策质量）\n');
@@ -45,9 +61,9 @@ console.log('难度            | AI/玩家食物比 | 被玩家吃掉的轮次 |
 console.log('-'.repeat(68));
 
 for (const level of Object.keys(DIFFICULTY)) {
-    const args = argsFor(level);
-    const foodOut = runSim('food-sim.js', [...args, '--trials', '8', '--foodGain', String(DIFFICULTY[level].foodGain)]);
-    const fleeOut = runSim('flee-sim.js', args);
+    const { flee: fleeArgs, food: foodArgs } = argsFor(level);
+    const foodOut = runSim('food-sim.js', [...foodArgs, `--trials=8`, `--foodGain=${DIFFICULTY[level].foodGain}`]);
+    const fleeOut = runSim('flee-sim.js', fleeArgs);
 
     const ratio = (foodOut.match(/食物获取比：([\d.]+)/) || [])[1] || '?';
     const eaten = (fleeOut.match(/被吃：(\d+)\/20/) || [])[1] || '?';

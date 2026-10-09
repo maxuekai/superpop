@@ -18,7 +18,9 @@ import { distance } from '../src/core/utils.js';
 const STEP = 1 / 60;
 const WORLD = WORLD_CONFIG; // 从 config 导入，别再硬编码——世界放大后这里不改就成了在旧地图上测
 const RUN_SECONDS = 60;
-const TRIALS = 20;
+// 默认 20 轮；--trials 覆盖（与 food-sim 一致）。曾经只在 flags 里声明却没应用，
+// `--trials 40` 会静默跑 20 轮——按不存在的默认值下结论。
+let TRIALS = 20;
 const CORNER_CLEARANCE = 50; // 离边界小于该值算「被逼到墙角」
 const THREAT_RANGE = 180; // 猎手进入该距离算「受威胁」
 
@@ -65,6 +67,7 @@ if (flagValue('escapeProbe') !== undefined) AI.escapeProbe = flagValue('escapePr
 if (flagValue('escapeWallWeight') !== undefined) AI.escapeWallWeight = flagValue('escapeWallWeight');
 if (flagValue('escapeFoodWeight') !== undefined) AI.escapeFoodWeight = flagValue('escapeFoodWeight');
 if (flagValue('escapeFoodRange') !== undefined) AI.escapeFoodRange = flagValue('escapeFoodRange');
+if (flagValue('trials') !== undefined) TRIALS = flagValue('trials');
 
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;
