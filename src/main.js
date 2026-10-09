@@ -36,8 +36,10 @@ window.addEventListener('load', () => {
     });
     keyboard.enable();
 
-    // 开局 / 结算界面的按钮把操作转交给游戏
-    hud.onStart((name) => game.begin(name));
+    // 开局 / 结算界面的按钮把操作转交给游戏。
+    // 注意要把 difficulty 一并传下去：曾有一版只写 (name)，难度选择器点了
+    // 也不生效（setDifficulty(undefined) 静默回落 normal），纯 UI 自嗨。
+    hud.onStart((name, difficulty) => game.begin(name, difficulty));
     hud.onRespawn((name) => game.respawnPlayer(name));
     hud.onSplit(() => game.requestSplit());
     hud.onMenu(() => game.quitToMenu());
