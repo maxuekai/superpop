@@ -68,8 +68,10 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 - **新增玩法规则优先写进 `core/rules.js`**（纯函数、不碰 DOM），`Game` 只负责调度与渲染——只有这样才能被单测覆盖。
 - **固定步长**：`Game.loop` 用累加器按 `TICK.fps`(60) 推进，每帧上限 `maxSteps` 步，超出丢积压；渲染跟随刷新率。
   `Ball.update(dt)` 的位移与弹簧都乘 `dt * speedUnit`，否则 120Hz 手机上球速会是 60Hz 的两倍。
-- **状态机**：`menu` → `playing` → `dead`（被吃）/ `crowned`（称王）。只有 `playing` 跑 `updateWorld`，
-  弹层期间世界冻结。称王条件在 `rules.isCrowned`（质量 ≥ `KING.mass` **且**当前第一）。
+- **状态机**：`menu` → `playing` → `dying`（被吃演出）→ `dead`（结算）/ `playing` → `crowned`（称王）。
+  只有 `playing` 与 `dying` 跑 `updateWorld`（`dying` 按 `DEATH.slowMoScale` 慢放，`this.time` 跟世界走，
+  演出计时 `dyingTimer` 用真实秒），播完 `finishDeath()` 才弹结算；弹层期间世界冻结。
+  称王条件在 `rules.isCrowned`（质量 ≥ `KING.mass` **且**当前第一）。
 - **世界尺寸与食物数必须同步**：`WORLD` 和 `FOOD.count` 一起改，保持面密度 λ 不变
   （屏内食物数 = λ × 视口面积）。竖屏手机的视野上限由**世界高度**决定，世界越高缩放区间越长。
 - **相机钳制**：视口大于世界时 `Camera.clampView` 必须**居中**，不能贴左上角——旧的"左边超出→贴左"
