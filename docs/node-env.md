@@ -10,7 +10,19 @@
 
 ## 非交互 shell 里 npm 不在 PATH
 
-自动化检查（以及 Agent 跑命令）用的 shell 不加载 PowerShell profile，`npm` 经常找不到。先加 PATH：
+自动化检查（以及 Agent 跑命令）用的 shell 不加载 profile，`npm` 经常找不到。
+**还有一个连锁坑**：`cd` 进仓库会触发 fnm 的 use-on-cd 钩子，它在非交互 shell 里报错
+并返回非零退出码——`cd 仓库 && npm test` 会整条断掉（`&&` 被 cd 的退出码短路），
+症状是"命令根本没跑但没报 npm 的错"。
+
+Git Bash（Agent 环境，glob 不钉版本，已验证）：
+
+```bash
+export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tail -1):$PATH"
+cd 仓库; npm test        # 用 ; 不用 &&，或干脆 git -C 仓库 …
+```
+
+PowerShell：
 
 ```powershell
 $bin = "$env:APPDATA\fnm\node-versions\v24.x\installation"
@@ -44,3 +56,10 @@ git config --global https.proxy http://127.0.0.1:7897
 ## 端口占用
 
 `npm run dev` 报 `EADDRINUSE` 说明已经有 dev server 在跑（它是按请求读盘的，改代码刷新即可生效，不必重启）。
+
+如果确实要杀掉它（比如挂机太久的孤儿进程），注意**杀 npm 包装进程不会带走 node 子进程**：
+
+```bash
+netstat -ano | grep ":3000" | grep LISTENING   # 找到 PID
+taskkill //PID <pid> //F
+```

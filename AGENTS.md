@@ -23,16 +23,24 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 | `npm run sim:food` | 食物密度与成长仿真：密度、命中概率、速度剖面、玩家 vs AI 成长对比 | 无 |
 | `npm run server` | 多人联机服务端（express + socket.io），未接通 | 需先 `npm install` |
 
-非交互 shell 里 `npm` 不在 PATH 时先加 PATH，见 [docs/node-env.md](docs/node-env.md)。
+**非交互 shell（Agent 跑命令）的坑**：shell 不加载 profile 时 `node/npm` 不在 PATH，且
+`cd` 进仓库会触发 fnm 钩子报错——它返回非零退出码，`cd 仓库 && npm test` 会**整条断掉**。
+每个新 shell 先执行（glob 不钉版本，已验证）：
+
+```bash
+export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tail -1):$PATH"
+```
+
+然后用 `cd 仓库; npm test`（`;` 不被 cd 的退出码短路）或 `git -C 仓库 …`。PowerShell 方言见 [docs/node-env.md](docs/node-env.md)。
 
 ## 目录结构
 
 ```
 ├── index.html            # canvas + 体重面板 + 排行榜 + 摇杆 + 开局/结算弹层 + 分裂按钮
 ├── src/
-│   ├── main.js           # 入口：装配 Game / Joystick / Keyboard / Hud
+│   ├── main.js           # 入口：装配 Game / Joystick / Keyboard / Hud，滚轮缩放
 │   ├── config.js         # 全部可调常量（每个都写了调它的理由）
-│   ├── core/             # 玩法逻辑，纯逻辑、不碰 DOM
+│   ├── core/             # 玩法逻辑，纯逻辑、不碰 DOM（例外：log-panel 挂 DOM）
 │   │   ├── game.js       # 主循环（固定步长）、调度与渲染
 │   │   ├── rules.js      # 裁定层：互吃/吃食物/名次/排行榜/分裂合并/AI 数量/出生点
 │   │   ├── ball.js       # 球基类：移动、钳制、弹簧回弹、绘制、进食与互吃判定、出生保护
@@ -40,14 +48,23 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 │   │   ├── ai.js         # AI 细胞（继承 Ball，加决策与逃跑方向打分）
 │   │   ├── camera.js     # 死区跟随相机，视口钳制在世界内，支持 snapTo
 │   │   ├── map.js        # 背景程序生成，只烤一次，按视口裁剪
+│   │   ├── log.js        # 诊断日志环形缓冲（埋点埋在 game/ball，默认开）
+│   │   ├── log-panel.js  # 运行日志 DOM 面板（?debug=1 挂载）
 │   │   ├── rectangle.js  # 矩形工具（within/overlaps）
-│   │   └── utils.js      # 数学、随机、clamp、clusterOffset、formatTime、颜色
-│   ├── input/            # joystick.js（浮动摇杆）/ keyboard.js（WASD + 动作键）
+│   │   └── utils.js      # 数学、随机、clamp、smoothTowards、zoomTarget、颜色
+│   ├── input/            # joystick.js（浮动摇杆 + 双指捏合缩放）/ keyboard.js（WASD + 动作键 + 缩放键）
 │   ├── ui/hud.js         # DOM 层：体重面板、排行榜、弹层、分裂按钮
 │   ├── styles/           # reset.css + index.css
-│   └── net/client.js     # 联机客户端占位（未实现）
+│   └── net/client.js     # 联机客户端占位（未实现，见 TODO.md 第二阶段规划）
 ├── server/               # dev-server.js（开发预览）/ index.js（联机，未接通）
-├── scripts/              # check.js / rules-test.js / flee-sim.js / food-sim.js
+├── scripts/              # 仿真与检查全套：
+│                         #   args.js（仿真共用 flag 解析 + 撞值护栏）
+│                         #   check.js（语法 + 结构性检查）/ rules-test.js（96 条规则单测）
+│                         #   invariants.js（config 硬约束断言，11 条）
+│                         #   flee-sim.js（追击仿真）/ food-sim.js（觅食仿真）
+│                         #   respawn-check / endgame-check / zoom-report / difficulty-report（体检脚本）
+├── .agents/skills/       # 项目级 skill：tuning-config-value / device-feedback-triage /
+│                         #   no-silent-failure / superpop-browser-test（浏览器实测套路）
 └── docs/                 # tuning.md（数值与实测）/ node-env.md（环境坑）
 ```
 
@@ -60,6 +77,8 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
   `ui/hud.js` 只做 DOM 读写。事件监听目标由构造传入（`new Keyboard(document, ...)`），不要在类里直接摸 `document`。
 - 服务端与客户端的事件名约定：`registe` / `create` / `enter` / `update`（改动需两端同步）。
 - 保持行为等价：改之前先看 TODO.md 对应条目，别顺手改出与记录不符的行为。
+- commit 消息：`feat:` / `fix:` / `docs:` / `refactor:` + 中文标题；**正文写根因与实测数字**
+  （"为什么改、凭什么说改对了"），代码与文档分开提交。
 
 ## 关键行为（重构时勿意外改变）
 
