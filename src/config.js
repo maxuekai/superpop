@@ -53,6 +53,11 @@ export const VIEW = {
 export const FOOD = {
     count: 747,
     radius: 3,
+    // 每颗绘制半径在 radius 上下的抖动幅度（比例）：3 × (1±0.13) ≈ 2.6~3.4 世界单位。
+    // 纯视觉：一簇里大小略有参差才有「一撮吃的」的质感，完全等大像贴图。
+    // **只作用于绘制与视口裁剪，不进吃判定**——吃判定保持 radius 基准（ball.canEatFood），
+    // 0.4 个世界单位的差异远小于球半径（≥10），玩家感知不到，不值得为它动判定路径。
+    radiusJitter: 0.13,
     avoidGap: 40,
     clusterSize: 5,
     clusterRadius: 46,

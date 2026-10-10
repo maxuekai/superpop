@@ -64,10 +64,7 @@ export class Game {
         this.ai = [];
         this.balls = [this.player];
 
-        this.foodList = [];
-        for (let i = 0; i < FOOD.count; i += 1) {
-            this.foodList.push(this.spawnFood());
-        }
+        this.seedFood();
 
         this.map = new GameMap(this.world.width, this.world.height);
 
@@ -195,8 +192,18 @@ export class Game {
         return { x: this.camera.xView, y: this.camera.yView, w: this.camera.wView, h: this.camera.hView };
     }
 
-    // 生成一颗食物：先找一个避开所有球的簇心，再让这颗落在簇内（成簇更好找）
-    spawnFood() {
+    // 造一颗食物（位置/颜色由调用方决定）：带上各自的绘制半径抖动，见 config.FOOD.radiusJitter
+    makeFood(x, y, color) {
+        return {
+            x: clamp(x, FOOD.radius + 2, this.world.width - FOOD.radius - 2),
+            y: clamp(y, FOOD.radius + 2, this.world.height - FOOD.radius - 2),
+            color,
+            radius: FOOD.radius * (1 + randomFloat(-FOOD.radiusJitter, FOOD.radiusJitter)),
+        };
+    }
+
+    // 找一个避开所有球的簇心（远离球身 foodGap 以上）；重试 8 次后放弃挑剔
+    foodClusterCenter() {
         const margin = FOOD.radius + 4 + FOOD.clusterRadius;
         let center = this.randomPosition(margin);
         for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -212,12 +219,41 @@ export class Game {
                 break;
             }
         }
+        return center;
+    }
+
+    // 生成一簇食物：整簇共享簇心与颜色，每颗落在簇半径内。
+    // 同簇一个颜色，「成片」才扫得出来——逐颗随机色（旧行为）糊成彩屑，手机上尤其明显。
+    spawnCluster(count) {
+        const center = this.foodClusterCenter();
+        const color = randomItem(COLORS);
+        const foods = [];
+        for (let i = 0; i < count; i += 1) {
+            const offset = clusterOffset(FOOD.clusterRadius);
+            foods.push(this.makeFood(center.x + offset.dx, center.y + offset.dy, color));
+        }
+        return foods;
+    }
+
+    // 被吃掉的单颗重生：贴着一颗幸存食物落子并继承它的颜色——
+    // 簇被吃掉一部分后能从邻居「长回来」，而不是退化成随机散点（颜色一杂成片感就没了）。
+    // 锚点随机选，簇的扩张才均匀；副作用是簇会缓慢变大，一局内幅度很小，且每局 seedFood 重置。
+    spawnFood() {
+        const anchor = this.foodList.length > 0 ? randomItem(this.foodList) : null;
+        if (!anchor) {
+            return this.spawnCluster(1)[0];
+        }
         const offset = clusterOffset(FOOD.clusterRadius);
-        return {
-            x: clamp(center.x + offset.dx, FOOD.radius + 2, this.world.width - FOOD.radius - 2),
-            y: clamp(center.y + offset.dy, FOOD.radius + 2, this.world.height - FOOD.radius - 2),
-            color: randomItem(COLORS),
-        };
+        return this.makeFood(anchor.x + offset.dx, anchor.y + offset.dy, anchor.color);
+    }
+
+    // 开局铺场：按簇铺满 FOOD.count，最后一簇不足额就少放几颗
+    seedFood() {
+        this.foodList = [];
+        while (this.foodList.length < FOOD.count) {
+            const n = Math.min(FOOD.clusterSize, FOOD.count - this.foodList.length);
+            this.foodList.push(...this.spawnCluster(n));
+        }
     }
 
     // 抽一个当前没人用的昵称（同屏出现两个同名会让玩家分不清，规则见 rules.pickFreeName）
@@ -362,10 +398,7 @@ export class Game {
         this.ai = [];
         this.rebuildBalls();
         this.spawnAi(this.targetAiCount());
-        this.foodList = [];
-        for (let i = 0; i < FOOD.count; i += 1) {
-            this.foodList.push(this.spawnFood());
-        }
+        this.seedFood();
         this.rebuildBalls();
     }
 
@@ -637,10 +670,12 @@ export class Game {
     // （逐颗 beginPath+fill 在 360 颗时会有上千次绘制调用，合批后只调用几次）
     drawFood(context) {
         const byColor = new Map();
-        const viewLeft = this.camera.xView - FOOD.radius;
-        const viewRight = this.camera.xView + this.camera.wView + FOOD.radius;
-        const viewTop = this.camera.yView - FOOD.radius;
-        const viewBottom = this.camera.yView + this.camera.hView + FOOD.radius;
+        // 裁剪边距按抖动后的半径上限算，不然视口边缘的大颗会凭空消失
+        const pad = FOOD.radius * (1 + FOOD.radiusJitter);
+        const viewLeft = this.camera.xView - pad;
+        const viewRight = this.camera.xView + this.camera.wView + pad;
+        const viewTop = this.camera.yView - pad;
+        const viewBottom = this.camera.yView + this.camera.hView + pad;
 
         for (const food of this.foodList) {
             if (food.x < viewLeft || food.x > viewRight || food.y < viewTop || food.y > viewBottom) {
@@ -658,9 +693,10 @@ export class Game {
         for (const [color, list] of byColor) {
             context.beginPath();
             for (const food of list) {
-                // 先 moveTo 才能让同一路径里每颗食物都是独立子路径
-                context.moveTo(food.x + FOOD.radius, food.y);
-                context.arc(food.x, food.y, FOOD.radius, 0, Math.PI * 2);
+                // 先 moveTo 才能让同一路径里每颗食物都是独立子路径；
+                // 半径按颗取（抖动只影响绘制，不进吃判定）
+                context.moveTo(food.x + food.radius, food.y);
+                context.arc(food.x, food.y, food.radius, 0, Math.PI * 2);
             }
             context.closePath();
             context.fillStyle = color;
