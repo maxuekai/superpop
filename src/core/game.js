@@ -38,7 +38,7 @@ import {
     splitStatus,
     targetAiCount,
 } from './rules.js';
-import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem, smoothTowards } from './utils.js';
+import { clamp, clusterOffset, distance, randomFloat, randomInt, randomItem, smoothTowards, zoomTarget } from './utils.js';
 import { log, logSnapshot } from './log.js';
 
 // 游戏主循环：逻辑按固定步长推进（update），渲染跟随屏幕刷新率（draw）。
@@ -73,6 +73,9 @@ export class Game {
         this.cssWidth = 0;
         this.cssHeight = 0;
         this.fitScale = 1;
+        // 用户手动缩放系数（滚轮 / +、- 键 / 双指捏合写它）。是乘在自动缩放上的偏好而非
+        // 游戏状态，重开一局不清——玩家特意调的视野不该被「再来一局」悄悄改回去。
+        this.userZoom = 1;
 
         this.accumulator = 0;
         this.lastTime = 0;
@@ -650,10 +653,17 @@ export class Game {
     // snap=true 用于首次布局与重开一局——那种情况本来就该立刻就位。
     targetScale() {
         const sizeZoom = Math.pow(this.largestCell().r / PLAYER.radius, VIEW.zoomExponent);
-        return Math.max(
+        const auto = Math.max(
             this.fitScale,
             Math.max(this.cssWidth, this.cssHeight) / (VIEW.longEdgeWorld * sizeZoom),
         );
+        return zoomTarget(auto, this.fitScale, this.userZoom, VIEW.userZoomMax);
+    }
+
+    // 用户缩放入口（滚轮 / +、- 键 / 双指捏合都走这里）：只改系数。
+    // 画面的平滑交给 updateViewScale——系数一变目标就变，scale 按既定速率逼近，不会硬跳。
+    zoomBy(factor) {
+        this.userZoom = clamp(this.userZoom * factor, VIEW.userZoomMin, VIEW.userZoomMax);
     }
 
     updateViewScale(dt, snap = false) {

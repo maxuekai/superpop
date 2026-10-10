@@ -2,7 +2,7 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, KING, NAMES, PLAYER, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
+import { AI, EAT, FOOD, JOYSTICK, KEYS, KING, NAMES, PLAYER, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { Camera } from '../src/core/camera.js';
@@ -26,7 +26,7 @@ import {
     splitStatus,
     targetAiCount,
 } from '../src/core/rules.js';
-import { clusterOffset, randomFloat, smoothTowards } from '../src/core/utils.js';
+import { clusterOffset, randomFloat, smoothTowards, wheelZoomFactor, zoomTarget } from '../src/core/utils.js';
 import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
@@ -344,6 +344,39 @@ test('clusterOffset：偏移落在簇半径内，且方向是散开的', () => {
     assert.ok(spread.size > 30, `簇内应该散开，实际只占了 ${spread.size} 个格子`);
 });
 
+// ---------- 视野缩放 ----------
+
+test('wheelZoomFactor：像素/行/页三种 deltaMode 归一到同一档约 ×0.88', () => {
+    const pixel = wheelZoomFactor(100, 0);
+    const line = wheelZoomFactor(3, 1);
+    assert.ok(Math.abs(pixel - line) < 0.01, `像素模式与行模式应归一到同一档：${pixel} vs ${line}`);
+    assert.ok(pixel > 0.85 && pixel < 0.91, `一格（向下滚）应约 ×0.88，实际 ${pixel.toFixed(3)}`);
+    assert.ok(wheelZoomFactor(-100, 0) > 1, '向上滚（deltaY<0）应是拉近（系数 >1）');
+});
+
+test('zoomTarget：缩出钳在 fitScale 包络内、缩进钳在自动值 × 上限', () => {
+    // 手机竖屏量级：自动缩放 0.938、fitScale 0.507（含 maxZoomOut=1.3）
+    const auto = 0.938;
+    const fitScale = 0.507;
+    assert.equal(zoomTarget(auto, fitScale, 1, 2.0), auto, 'userZoom=1 时目标就是自动缩放');
+    assert.equal(zoomTarget(auto, fitScale, 0.1, 2.0), fitScale,
+        '拉再远也不能低于 fitScale——否则越过 maxZoomOut 包络、露出更多世界外空白');
+    assert.equal(zoomTarget(auto, fitScale, 99, 2.0), auto * 2.0,
+        '拉再近也不能超过自动值 × userZoomMax——不然一颗食物就能占满屏');
+    // 自动缩放已到下限（大球）时往里缩仍然有效
+    assert.equal(zoomTarget(fitScale, fitScale, 2.0, 2.0), fitScale * 2.0,
+        '大球（自动=下限）时拉近应该可用');
+});
+
+test('zoomBy 钳制口径与 zoomTarget 一致（userZoom 永远落在 [min, max]）', () => {
+    // 直接验证 Game.zoomBy 用的 clamp 边界来源：VIEW.userZoomMin/Max 必须把 0.5 与 2.0
+    // 包在里面，否则捏一捏就顶死在同一边
+    assert.ok(VIEW.userZoomMin < 1 && VIEW.userZoomMax > 1,
+        `userZoom 区间 [${VIEW.userZoomMin}, ${VIEW.userZoomMax}] 必须跨过 1（1=不缩放）`);
+    assert.ok(VIEW.userZoomMax / VIEW.userZoomMin >= 3,
+        '双向可缩的区间太窄的话，缩放按钮等于没做');
+});
+
 test('进食判定：食物变大后更容易吃到', () => {
     const b = ball(100, 100, PLAYER.radius);
     const reach = PLAYER.radius + FOOD.radius;
@@ -478,6 +511,43 @@ test('键盘：切到后台标签页也松开所有键（此时 keyup 可能已�
     assert.ok(player.speedX < 0);
     target.fire('visibilitychange', {});
     assert.equal(player.speedX, 0, '丢掉的 keyup 不能让球一直跑');
+});
+
+test('键盘：+/− 缩放视野，方向和档位走 onZoom 回调', () => {
+    const zooms = [];
+    const target = fakeTarget();
+    const keyboard = new Keyboard(target, ball(500, 500, PLAYER.radius), {
+        onZoom: (factor) => zooms.push(factor),
+    });
+    keyboard.enable();
+
+    target.fire('keydown', keyEvent('Equal', target)); // 主键盘 =
+    assert.equal(zooms.length, 1);
+    assert.ok(zooms[0] > 1, `+ 应该拉近（系数 >1），实际 ${zooms[0]}`);
+    assert.ok(Math.abs(zooms[0] - KEYS.zoomStep) < 1e-9);
+
+    target.fire('keydown', keyEvent('Minus', target)); // 主键盘 -
+    assert.ok(zooms[1] < 1, `- 应该拉远（系数 <1），实际 ${zooms[1]}`);
+    assert.ok(Math.abs(zooms[1] - 1 / KEYS.zoomStep) < 1e-9, '一次一档，拉远是拉近的倒数');
+
+    // 小键盘的加减同样有效
+    target.fire('keydown', keyEvent('NumpadAdd', target));
+    target.fire('keydown', keyEvent('NumpadSubtract', target));
+    assert.equal(zooms.length, 4);
+});
+
+test('键盘：输入框里按 +/− 是打字，不触发缩放', () => {
+    const zooms = [];
+    const target = fakeTarget();
+    const keyboard = new Keyboard(target, ball(500, 500, PLAYER.radius), {
+        onZoom: (factor) => zooms.push(factor),
+    });
+    keyboard.enable();
+
+    const typing = keyEvent('Equal', { closest: (s) => (s.includes('input') ? typing : null) });
+    target.fire('keydown', typing);
+    assert.equal(zooms.length, 0, '输入框里的 +/− 是字符，不该缩放视野');
+    assert.equal(typing.prevented, false, '也不能 preventDefault 掉输入');
 });
 
 // ---------- 整局裁定（rules.js） ----------
@@ -903,12 +973,12 @@ function uiTarget() {
     return { closest: (selector) => (selector.includes('ui-interactive') ? uiTarget() : null) };
 }
 
-function fakeJoystick(input) {
+function fakeJoystick(input, onZoom) {
     const panel = { style: {}, querySelector: () => ({ style: {} }) };
     panel.ownerDocument = fakeTarget();
-    const joystick = new Joystick(panel, input);
+    const joystick = new Joystick(panel, input, onZoom ? { onZoom } : {});
     joystick.enable();
-    return { joystick, doc: panel.ownerDocument };
+    return { joystick, doc: panel.ownerDocument, panel };
 }
 
 test('摇杆：按住并拖动 → 把方向写进 input', () => {
@@ -952,19 +1022,126 @@ test('摇杆：松手即停，操控状态解除', () => {
     assert.equal(joystick.isActive, false);
 });
 
-test('摇杆：多指只认第一根，后来的手指不抢控', () => {
+// 多指触摸事件：touches 是当前按着的全部手指，changed 是本次事件涉及的手指
+// （touchend 时被抬起的那个手指已经不在 touches 里了，所以要单独传）
+function multiTouchEvent(type, touches, changed, target = null) {
+    const mk = (t) => ({ identifier: t.id, clientX: t.x, clientY: t.y });
+    return {
+        type,
+        target,
+        changedTouches: (changed || touches).map(mk),
+        touches: touches.map(mk),
+        defaultPrevented: false,
+        preventDefault() { this.defaultPrevented = true; },
+    };
+}
+
+// 双指捏合（视野缩放）：第二根画布手指进入捏合、停摇杆，抬指后原地恢复
+test('摇杆：第二根画布手指进入捏合——方向清零、面板藏起、拦掉页面默认手势', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc, panel } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchmove', touchEvent('touchmove', 1, 340, 400));
+    assert.ok(input.speedX > 0, '第一根手指正在操控');
+    const second = multiTouchEvent('touchstart',
+        [{ id: 1, x: 340, y: 400 }, { id: 2, x: 400, y: 400 }], [{ id: 2, x: 400, y: 400 }]);
+    doc.fire('touchstart', second);
+    assert.ok(joystick.pinch !== null, '第二根非界面手指应进入捏合');
+    assert.equal(second.defaultPrevented, true, '捏合要 preventDefault 掉页面的默认双指手势');
+    assert.equal(input.speedX, 0, '捏合期间摇杆方向清零（两指一起动时第一根的位移是噪声）');
+    assert.equal(panel.style.display, 'none', '捏合期间摇杆面板藏起');
+});
+
+test('摇杆：捏合两指张开/收拢 → onZoom 收到对应的距离比', () => {
+    const zooms = [];
+    const { doc } = fakeJoystick({ speedX: 0, speedY: 0 }, (f) => zooms.push(f));
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchstart', multiTouchEvent('touchstart',
+        [{ id: 1, x: 300, y: 400 }, { id: 2, x: 360, y: 400 }], [{ id: 2, x: 360, y: 400 }]));
+    // 张开：两指距离 60 → 160
+    doc.fire('touchmove', multiTouchEvent('touchmove',
+        [{ id: 1, x: 300, y: 400 }, { id: 2, x: 460, y: 400 }], [{ id: 2, x: 460, y: 400 }]));
+    assert.equal(zooms.length, 1);
+    assert.ok(Math.abs(zooms[0] - 160 / 60) < 1e-9, `张开应拉近（系数 = 距离比 160/60），实际 ${zooms[0]}`);
+    // 收拢：160 → 120
+    doc.fire('touchmove', multiTouchEvent('touchmove',
+        [{ id: 1, x: 300, y: 400 }, { id: 2, x: 420, y: 400 }], [{ id: 2, x: 420, y: 400 }]));
+    assert.ok(zooms[1] < 1, `收拢应拉远（系数 <1），实际 ${zooms[1]}`);
+});
+
+test('摇杆：捏合中摇杆手指自己移动不当方向（但两指距离变化仍算缩放）', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const zooms = [];
+    const { joystick, doc } = fakeJoystick(input, (f) => zooms.push(f));
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchstart', multiTouchEvent('touchstart',
+        [{ id: 1, x: 300, y: 400 }, { id: 2, x: 360, y: 400 }], [{ id: 2, x: 360, y: 400 }]));
+    // 摇杆手指挪动：不写方向，但两指距离确实变了 → 产生缩放（60 → √(20²+30²)）
+    doc.fire('touchmove', multiTouchEvent('touchmove',
+        [{ id: 1, x: 340, y: 430 }, { id: 2, x: 360, y: 400 }], [{ id: 1, x: 340, y: 430 }]));
+    assert.equal(input.speedX, 0, '捏合期间第一根手指的移动不当方向');
+    assert.equal(zooms.length, 1, '两指距离变了就是缩放，不管动的是哪根');
+    assert.ok(Math.abs(zooms[0] - Math.hypot(20, 30) / 60) < 1e-9,
+        `系数 = 距离比 √(20²+30²)/60，实际 ${zooms[0]}`);
+    // 第三根手指按下/移动都不产生缩放，捏合的两根手指不变
+    doc.fire('touchstart', multiTouchEvent('touchstart',
+        [{ id: 1, x: 340, y: 430 }, { id: 2, x: 360, y: 400 }, { id: 3, x: 500, y: 500 }],
+        [{ id: 3, x: 500, y: 500 }]));
+    doc.fire('touchmove', multiTouchEvent('touchmove',
+        [{ id: 1, x: 340, y: 430 }, { id: 2, x: 360, y: 400 }, { id: 3, x: 520, y: 520 }],
+        [{ id: 3, x: 520, y: 520 }]));
+    assert.equal(zooms.length, 1, '第三根手指不该产生缩放');
+    assert.equal(joystick.pinch.idA, 1, '捏合的两根手指不变');
+    assert.equal(joystick.pinch.idB, 2);
+});
+
+test('摇杆：捏合结束摇杆手指还按着 → 原地恢复操控（重新锚定，不跳方向）', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc, panel } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchstart', multiTouchEvent('touchstart',
+        [{ id: 1, x: 300, y: 400 }, { id: 2, x: 360, y: 400 }], [{ id: 2, x: 360, y: 400 }]));
+    // 缩放手指（2）抬起，摇杆手指（1）在 (340,400) 还按着
+    doc.fire('touchend', multiTouchEvent('touchend',
+        [{ id: 1, x: 340, y: 400 }], [{ id: 2, x: 400, y: 400 }]));
+    assert.equal(joystick.pinch, null, '捏合结束');
+    assert.equal(joystick.isActive, true, '摇杆手指还在，操控恢复');
+    assert.equal(panel.style.display, 'block', '摇杆面板重新出现');
+    assert.equal(input.speedX, 0, '恢复瞬间方向归零，等手指再动');
+    // 从新锚点继续拖动：位移相对恢复点算，不会把捏合期间的位移算进去
+    doc.fire('touchmove', multiTouchEvent('touchmove',
+        [{ id: 1, x: 380, y: 400 }], [{ id: 1, x: 380, y: 400 }]));
+    assert.ok(Math.abs(input.speedX - 40) < 1e-9, `恢复后从新原点起算，实际 ${input.speedX}`);
+});
+
+test('摇杆：捏合中摇杆手指抬起 → 整个手势结束、球停', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { joystick, doc, panel } = fakeJoystick(input);
+    doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
+    doc.fire('touchstart', multiTouchEvent('touchstart',
+        [{ id: 1, x: 300, y: 400 }, { id: 2, x: 360, y: 400 }], [{ id: 2, x: 360, y: 400 }]));
+    doc.fire('touchend', multiTouchEvent('touchend', [], [{ id: 1, x: 300, y: 400 }]));
+    assert.equal(joystick.isActive, false, '摇杆手指抬起 = 操控结束');
+    assert.equal(joystick.pinch, null);
+    assert.equal(input.speedX, 0);
+    assert.equal(panel.style.display, 'none');
+});
+
+test('摇杆：第二根手指按在界面上不进捏合（按钮要能点），方向也不受影响', () => {
     const input = { speedX: 0, speedY: 0 };
     const { joystick, doc } = fakeJoystick(input);
     doc.fire('touchstart', touchEvent('touchstart', 1, 300, 400));
     doc.fire('touchmove', touchEvent('touchmove', 1, 340, 400));
     const before = input.speedX;
-    // 第二根手指按下应被忽略
-    const second = touchEvent('touchstart', 2, 100, 100);
+    const second = multiTouchEvent('touchstart',
+        [{ id: 1, x: 340, y: 400 }, { id: 2, x: 360, y: 620 }], [{ id: 2, x: 360, y: 620 }], uiTarget());
     doc.fire('touchstart', second);
-    assert.equal(second.defaultPrevented, false, '被忽略的手指不该被 preventDefault');
+    assert.equal(joystick.pinch, null, '界面上的第二根手指不进捏合');
+    assert.equal(second.defaultPrevented, false, '不能拦掉界面的点击');
     assert.equal(input.speedX, before, '方向仍由第一根手指控制');
-    // 第一根抬起才停（抬起第二根不停）
-    doc.fire('touchend', touchEvent('touchend', 2, 100, 100));
+    // 抬起的是界面上的手指：不影响操控
+    doc.fire('touchend', multiTouchEvent('touchend',
+        [{ id: 1, x: 340, y: 400 }], [{ id: 2, x: 360, y: 620 }]));
     assert.equal(joystick.isActive, true, '抬起非操控手指不该停止');
 });
 

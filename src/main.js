@@ -2,6 +2,7 @@ import { ACTIONS } from './config.js';
 import { Game } from './core/game.js';
 import { initLog, logText } from './core/log.js';
 import { mountLogPanel, startLogPanelTicker } from './core/log-panel.js';
+import { wheelZoomFactor } from './core/utils.js';
 import { Joystick } from './input/joystick.js';
 import { Keyboard } from './input/keyboard.js';
 import { Hud } from './ui/hud.js';
@@ -27,13 +28,16 @@ window.addEventListener('load', () => {
         window.__exposeGame(game);
     }
 
-    // 摇杆和键盘都往 game.input 写方向，再由 Game 同步给每一个分身
+    // 摇杆和键盘都往 game.input 写方向，再由 Game 同步给每一个分身。
+    // 摇杆的第二根手指走双指捏合缩放视野（onZoom 收两指距离比）
     const controlPanel = document.querySelector('.control-panel');
-    const joystick = new Joystick(controlPanel, game.input);
+    const joystick = new Joystick(controlPanel, game.input, {
+        onZoom: (factor) => game.zoomBy(factor),
+    });
     joystick.enable();
 
     // 桌面端用 WASD/方向键；手指在屏幕上操控时键盘自动让位。
-    // Space 之类的动作键通过 onAction 转交给游戏（分裂）。
+    // Space 之类的动作键通过 onAction 转交给游戏（分裂），+/- 键通过 onZoom 缩放视野。
     const keyboard = new Keyboard(document, game.input, {
         isBlocked: () => joystick.isActive,
         onAction: (code) => {
@@ -41,8 +45,19 @@ window.addEventListener('load', () => {
                 game.requestSplit();
             }
         },
+        onZoom: (factor) => game.zoomBy(factor),
     });
     keyboard.enable();
+
+    // 桌面滚轮也是视野缩放（一格约 ×0.88）。Ctrl+滚轮留给浏览器的页面缩放，不抢；
+    // passive: false 才能 preventDefault 掉页面滚动
+    canvas.addEventListener('wheel', (e) => {
+        if (e.ctrlKey) {
+            return;
+        }
+        e.preventDefault();
+        game.zoomBy(wheelZoomFactor(e.deltaY, e.deltaMode));
+    }, { passive: false });
 
     // 开局 / 结算界面的按钮把操作转交给游戏。
     // 注意要把 difficulty 一并传下去：曾有一版只写 (name)，难度选择器点了

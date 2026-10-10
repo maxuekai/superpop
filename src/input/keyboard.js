@@ -3,7 +3,8 @@ import { ACTIONS, KEYS } from '../config.js';
 // 键盘操控（WASD / 方向键 + 动作键）：方向写进 input.speedX/speedY（单位是「摇杆像素量」），
 // 与浮动摇杆共用同一套速度分母，所以键盘与触屏手感一致。
 // 与摇杆的关系：摇杆正在操控时（isBlocked）键盘让位；在输入框/弹层里打字时不响应。
-// onAction 用来接动作键（分裂等），避免为每个动作再单独挂一个 document 监听。
+// onAction 用来接动作键（分裂等），onZoom 接视野缩放键（+、-，方向参数 ±1），
+// 避免为每个动作再单独挂一个 document 监听。
 export class Keyboard {
     constructor(target, input, options = {}) {
         this.target = target;
@@ -11,6 +12,7 @@ export class Keyboard {
         // 摇杆在用时让位；不传就默认永远不阻塞
         this.isBlocked = options.isBlocked || (() => false);
         this.onAction = options.onAction || (() => {});
+        this.onZoom = options.onZoom || (() => {});
 
         this.pressed = new Set();
 
@@ -28,6 +30,17 @@ export class Keyboard {
             || KEYS.left.includes(code);
     }
 
+    // 缩放键方向：+ 为 1，- 为 -1，其他 0
+    zoomDirection(code) {
+        if (KEYS.zoomIn.includes(code)) {
+            return 1;
+        }
+        if (KEYS.zoomOut.includes(code)) {
+            return -1;
+        }
+        return 0;
+    }
+
     isActionKey(code) {
         for (const list of Object.values(ACTIONS)) {
             if (list.includes(code)) {
@@ -43,7 +56,8 @@ export class Keyboard {
 
     handleKeyDown(e) {
         const action = this.isActionKey(e.code);
-        if (!action && !this.isGameKey(e.code)) {
+        const zoomDir = this.zoomDirection(e.code);
+        if (!action && zoomDir === 0 && !this.isGameKey(e.code)) {
             return;
         }
         if (this.isIgnorable(e.target)) {
@@ -53,6 +67,12 @@ export class Keyboard {
         e.preventDefault();
         if (action) {
             this.onAction(e.code);
+            return;
+        }
+        if (zoomDir !== 0) {
+            // 一次一档；按住时靠系统自动重复连缩。缩放不受 isBlocked 影响——
+            // 它是视角偏好，跟「谁在操控移动」无关
+            this.onZoom(zoomDir > 0 ? KEYS.zoomStep : 1 / KEYS.zoomStep);
             return;
         }
         this.pressed.add(e.code);

@@ -55,6 +55,21 @@ export function clusterOffset(clusterRadius) {
     return { dx: Math.cos(angle) * dist, dy: Math.sin(angle) * dist };
 }
 
+// 滚轮滚动量 → 缩放系数（>1 拉近）。deltaMode 各浏览器不一：0 像素（Chrome 一格约 ±100）、
+// 1 行（Firefox 一格约 ±3）、2 页（罕见）。按行/页换算成像素量再取同一条指数曲线，
+// 一格约 ×0.88，正负号天然处理方向（向上滚 deltaY<0 → 系数 >1 → 拉近）。
+export function wheelZoomFactor(deltaY, deltaMode) {
+    const unit = deltaMode === 1 ? 33 : deltaMode === 2 ? 400 : 1;
+    return Math.exp(-deltaY * unit * 0.00125);
+}
+
+// 把用户缩放系数合成进目标缩放：缩出钳在 fitScale（fitScale 已含 maxZoomOut=1.3 的包络，
+// 再往下会露出更多世界外空白、也架空视野类不变量），缩进钳在自动值的 userZoomMax 倍。
+// auto 本身以 fitScale 为下限，所以 max ≥ min 恒成立，clamp 不会反转。
+export function zoomTarget(auto, fitScale, userZoom, userZoomMax) {
+    return clamp(auto * userZoom, fitScale, auto * userZoomMax);
+}
+
 // 秒 → m:ss
 export function formatTime(seconds) {
     const total = Math.max(0, Math.floor(seconds));

@@ -42,6 +42,12 @@ export const VIEW = {
     cameraDeadZone: 0.35,
     zoomLerp: 6,
     maxZoomOut: 1.3,
+    // 用户手动缩放（桌面滚轮 / +、- 键，手机双指捏合）：乘在「按体型算出的自动缩放」上。
+    // >1 拉近（看得少），<1 拉远（看得多）。缩出的下限在 zoomTarget 里钳到 fitScale——
+    // 视口永远不会比 maxZoomOut 允许的更大，不破坏既有的居中包络与视野类不变量；
+    // 缩进的上限是自动缩放 × userZoomMax，不设上限的话能把视野缩到一颗食物占满屏。
+    userZoomMin: 0.5,
+    userZoomMax: 2.0,
 };
 
 // 食物：count 颗、半径 radius，成簇生成（clusterSize 颗/簇，簇半径 clusterRadius）。
@@ -282,6 +288,10 @@ export const KEYS = {
     down: ['KeyS', 'ArrowDown'],
     left: ['KeyA', 'ArrowLeft'],
     right: ['KeyD', 'ArrowRight'],
+    // 视野缩放：每按一下缩一档（按住靠系统自动重复连缩）。手机端是双指捏合，见 joystick。
+    zoomIn: ['Equal', 'NumpadAdd'],
+    zoomOut: ['Minus', 'NumpadSubtract'],
+    zoomStep: 1.12,
     // 按键力度：沿用摇杆满舵值，保证键盘全速和触屏全速一致
     power: JOYSTICK.radius,
     // 输入框/弹层里打字时不响应按键
