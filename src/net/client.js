@@ -11,8 +11,10 @@ import { COLORS, FOOD, WORLD } from '../config.js';
 import { Ball } from '../core/ball.js';
 import { configHash } from '../core/config-hash.js';
 
-const INTERP_DELAY = 0.1; // 渲染滞后于服务端 100ms（5 帧 @20Hz），足够吃掉局域网抖动
-const INPUT_EVERY_FRAMES = 3; // 输入最多 20Hz（按游戏帧计，变化才发，松手必发）
+const INTERP_DELAY = 0.1; // 远程球渲染滞后于服务端 100ms（5 帧 @20Hz），足够吃掉局域网抖动
+const INPUT_EVERY_FRAMES = 2; // 输入最多 30Hz（按游戏帧计，变化才发，松手必发）
+const RECONCILE_PER_SNAPSHOT = 0.15; // 对账：每次快照把预测误差拉回 15%（≈0.3s 收敛）
+const SNAP_ERROR_RATIO = 1; // 误差超过「半径 × 1」直接吸附（被吃/被挤开/传送，预测错了就认）
 const SNAP_TIMEOUT_MS = 5000;
 
 // socket.io 的浏览器端由服务端托管（/socket.io/socket.io.js），
@@ -44,7 +46,8 @@ export class NetSession {
     // 调用方把错误显示给玩家。
     async join({ name, viewport }) {
         await loadSocketIo();
-        const socket = window.io({ timeout: SNAP_TIMEOUT_MS });
+        // 直连 websocket：默认的轮询回退会在弱网/防火墙下反复升降级，表现为卡顿
+        const socket = window.io({ transports: ['websocket'], timeout: SNAP_TIMEOUT_MS });
         this.socket = socket;
         let welcome;
 
@@ -204,6 +207,7 @@ export class NetWorld {
         this.renderTime = this.time;
         this.samples = new Map(); // key -> [{t,x,y,r}, ≤2]
         this.ghosts = new Map(); // key -> Ball
+        this.predictedCells = []; // 自己组的预测细胞（与 groups 里的 ghost 是同一批对象）
         for (const [id, qx, qy, ci] of welcome.food) {
             this.foodList.push(decodeFood(id, qx, qy, ci));
         }
@@ -318,6 +322,79 @@ export class NetWorld {
         if (snap.board) {
             this.board = snap.board;
         }
+        this.reconcileMine(mine);
+    }
+
+    // 自己组的预测对账。本地模拟与服务端是同一套 Ball.update，误差主要来自
+    // 输入在途（发包→服务端生效→快照回程约 20~80ms）与软碰撞/互吃推挤：
+    //   · 结构变化（分裂/合并/重生/死亡，细胞数变了）：预测模型作废，吸附服务端布局
+    //   · 参考点先按快照年龄外推（服务端看到的是几十 ms 前的位置，直接对账会
+    //     让预测恒定超前 equilibrium = 在途位移 ÷ 拉回比例，实测口径下能差 30 单位）
+    //   · 小误差每次快照拉回 15%（≈0.3s 收敛）；大误差（>半径）直接吸附
+    reconcileMine(mine) {
+        if (!mine) {
+            this.predictedCells = [];
+            return;
+        }
+        const prev = this.predictedCells;
+        if (prev.length !== mine.cells.length) {
+            for (let i = 0; i < mine.cells.length; i += 1) {
+                const s = this.referenceSample(`${this.myOwnerId}#${i}`);
+                if (s) {
+                    mine.cells[i].x = s.x;
+                    mine.cells[i].y = s.y;
+                    mine.cells[i].r = s.r;
+                    mine.cells[i].displayR = s.r;
+                }
+            }
+        } else {
+            for (let i = 0; i < mine.cells.length; i += 1) {
+                const s = this.referenceSample(`${this.myOwnerId}#${i}`);
+                const cell = mine.cells[i];
+                if (!s) {
+                    continue;
+                }
+                const dx = s.x - cell.x;
+                const dy = s.y - cell.y;
+                if (Math.hypot(dx, dy) > Math.max(SNAP_ERROR_RATIO * cell.r, 30)) {
+                    cell.x = s.x;
+                    cell.y = s.y;
+                } else {
+                    cell.x += dx * RECONCILE_PER_SNAPSHOT;
+                    cell.y += dy * RECONCILE_PER_SNAPSHOT;
+                }
+                cell.r = s.r; // 半径以服务端为准（成长/被吃不走本地预测）
+            }
+        }
+        this.predictedCells = mine.cells.slice();
+    }
+
+    isMine(key) {
+        return key.startsWith(`${this.myOwnerId}#`);
+    }
+
+    // 某实体最新的插值参考点：把最新采样按快照年龄外推到"现在"，
+    // 消掉与服务端权威位置之间的在途延迟（速度取最近两帧采样的差商）
+    referenceSample(key) {
+        const samples = this.samples.get(key);
+        if (!samples || samples.length === 0) {
+            return null;
+        }
+        const last = samples[samples.length - 1];
+        if (samples.length === 1) {
+            return last;
+        }
+        const prev = samples[samples.length - 2];
+        const dt = last.t - prev.t;
+        if (dt <= 0) {
+            return last;
+        }
+        const age = Math.min(this.time - last.t, 0.25); // 外推不超过 250ms
+        return {
+            x: last.x + ((last.x - prev.x) / dt) * age,
+            y: last.y + ((last.y - prev.y) / dt) * age,
+            r: last.r,
+        };
     }
 
     ghostFor(key, ownerId, color) {
@@ -346,18 +423,23 @@ export class NetWorld {
         return ghost;
     }
 
-    // 每渲染帧调用：推进插值时钟，把采样位置写到 ghost 上
-    tick(dt) {
+    // 每渲染帧调用：推进插值时钟（远程球），并用本地输入推进自己的细胞（预测）。
+    // localInput 传 Game.input——自己的球要的是"零延迟响应"，不是插值。
+    tick(dt, localInput) {
         this.renderTime += dt;
         const target = this.time - INTERP_DELAY;
-        // 落后太多（切后台/卡顿）就快进；不许跑到服务器时间前面
+        // 落后太多（切后台/卡顿）就 4 倍速追：硬跳会让所有远程球瞬移一帧，看起来像卡顿；
+        // 不许跑到服务器时间前面。
         if (this.renderTime < target - 0.25) {
-            this.renderTime = target;
+            this.renderTime = Math.min(target, this.renderTime + dt * 4);
         } else if (this.renderTime > this.time) {
             this.renderTime = this.time;
         }
         const smooth = Math.min(1, dt * 12);
         for (const [key, samples] of this.samples) {
+            if (this.isMine(key)) {
+                continue; // 自己的细胞由本地预测驱动（见下），不插值
+            }
             const ghost = this.ghosts.get(key);
             const pos = sampleAt(samples, this.renderTime);
             if (!ghost || !pos) {
@@ -368,6 +450,17 @@ export class NetWorld {
             ghost.r = pos.r;
             ghost.alive = true;
             ghost.displayR += (ghost.r - ghost.displayR) * smooth;
+        }
+        // 本地预测：自己的细胞用与服务端完全同一套 Ball.update 按本地输入推进。
+        // 输入到画面的延迟从 ~200ms（发包→服务端 tick→快照回程→插值延迟）降到 1 帧。
+        // 分裂/合并/被吃不做预测（结构变化由对账吸附，见 reconcileMine）。
+        const mine = this.myGroup();
+        if (mine && localInput) {
+            for (const cell of mine.cells) {
+                cell.speedX = localInput.speedX;
+                cell.speedY = localInput.speedY;
+                cell.update(dt, this.world);
+            }
         }
     }
 }

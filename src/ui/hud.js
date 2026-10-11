@@ -285,9 +285,14 @@ export class Hud {
         }
         if (this.settleDetailEl) {
             const base = `吃掉 ${stats.food} 颗食物 · 吞掉 ${stats.kills} 个球`;
+            // 联机里你的死亡不会重开世界（别人还在玩），文案必须说清楚，
+            // 否则"再来一局"会被理解成"给所有人开新一局"（真机反馈）
             this.settleDetailEl.textContent = stats.crowned
                 ? `你成了场上最大的球 · ${base}`
-                : base;
+                : (stats.online ? `${base} · 对局仍在继续，按钮让你原地满状态重新进场` : base);
+        }
+        if (this.respawnBtn) {
+            this.respawnBtn.textContent = stats.online ? '重新上场' : '再来一局';
         }
         if (this.settleWeightEl) {
             this.settleWeightEl.textContent = String(stats.weight);

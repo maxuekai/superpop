@@ -1599,10 +1599,10 @@ test('World：requestSplit 按组输入方向分裂，质量守恒（多组各�
 
 // ---------- 联机客户端 NetWorld（快照 → 可渲染世界） ----------
 
-// 造一份 welcome + 首帧快照
+// 造一份 welcome + 首帧快照（selfId 用 p0：它不在场上，p1/p2 都是远程球）
 function netWelcome() {
     return {
-        selfId: 'p1',
+        selfId: 'p0',
         configHash: 'x',
         world: { width: 1280, height: 1280 },
         time: 10,
@@ -1627,20 +1627,19 @@ test('NetWorld：welcome+首帧快照重建世界（多细胞组 / AI / 食物�
         ['p1', 140, 200, 20, 0, 0],   // 同组分身：分裂后的第二颗
         ['p2', 800, 800, 30, 0, 1],
     ], [['ball1', 500, 500, 40, 0, 2]]));
-    assert.equal(w.myOwnerId, 'p1');
+    assert.equal(w.myOwnerId, 'p0');
     assert.equal(w.foodList.length, 3, 'welcome 的食物全量要进世界');
     assert.equal(w.board.length, 1);
     assert.equal(w.groups.size, 2);
-    const me = w.myGroup();
-    assert.equal(me.cells.length, 2, '同组两颗分身都要重建出来');
-    assert.equal(me.name, '甲');
-    assert.deepEqual(me.stats, { playTime: 1, foodEaten: 2, kills: 0 }, '自己的组带服务端权威统计');
-    assert.equal(me.lastSplitAt, -Infinity);
+    const p1 = w.groups.get('p1');
+    assert.equal(p1.cells.length, 2, '同组两颗分身都要重建出来');
+    assert.equal(p1.name, '甲');
+    assert.equal(w.groups.get('p2').cells.length, 1);
     assert.equal(w.ai.length, 1);
     assert.equal(w.ai[0].name, '芋圆', 'AI 名字来自花名册');
     // ghost 位置来自快照量化值（×2 编码）
-    assert.equal(me.cells[0].x, 50);
-    assert.equal(me.cells[0].r, 10);
+    assert.equal(p1.cells[0].x, 50);
+    assert.equal(p1.cells[0].r, 10);
 });
 
 test('NetWorld：食物增量——被吃的消失、补种的新增（id 稳定）', () => {
@@ -1682,8 +1681,57 @@ test('NetWorld：消失的实体被清理（被吃 / 离开 AOI 不留鬼影）'
     assert.equal(w.ai.length, 0);
     assert.equal(w.ghosts.has('p2#0'), false, '鬼影要清掉');
     assert.equal(w.ghosts.has('ai:ball1'), false);
-    // 自己的组还在
-    assert.equal(w.myGroup().cells.length, 1);
+    // p1 的组还在
+    assert.equal(w.groups.get('p1').cells.length, 1);
+});
+
+// 自己在场上（selfId p1）的 welcome，预测测试用
+function netWelcomeSelf() {
+    const w = netWelcome();
+    w.selfId = 'p1';
+    return w;
+}
+
+test('NetWorld：本地预测——自己的细胞按本地输入即时推进，不等快照（修"不丝滑"）', () => {
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    const cell = w.myGroup().cells[0];
+    const x0 = cell.x;
+    // 满舵右移 0.5 秒：Ball.update 与服务端同一套代码，速度 = 70 / divisor × speedUnit
+    for (let i = 0; i < 30; i += 1) {
+        w.tick(1 / 60, { speedX: 70, speedY: 0 });
+    }
+    assert.ok(cell.x > x0 + 30, `本地输入要立即驱动预测球，实际 ${x0} → ${cell.x}`);
+    // 没有任何快照到达，位置纯本地模拟
+    assert.equal(w.samples.get('p1#0').length, 1, '期间没有新快照');
+});
+
+test('NetWorld：对账——小误差按比例拉回，大误差直接吸附（快照回到场上的服务端位置）', () => {
+    // 服务端球在世界 x=200（快照量化值 400）
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 400, 200, 20, 0, 0]]));
+    const cell = w.myGroup().cells[0];
+    assert.equal(cell.x, 200);
+    // 预测漂到 (230, 200)，服务端仍说 (200, 200)：误差 30 ≤ 吸附阈值 → 只拉回 15%
+    cell.x = 230;
+    w.applySnapshot(netSnap(10500, [['p1', 400, 200, 20, 0, 0]]));
+    assert.ok(cell.x > 200 && cell.x < 230, `小误差该部分拉回，实际 ${cell.x}`);
+    // 预测漂到 (600, 200)（比如被大球挤开，预测模型没这信息）：误差远超阈值 → 吸附
+    cell.x = 600;
+    w.applySnapshot(netSnap(11000, [['p1', 400, 200, 20, 0, 0]]));
+    assert.equal(cell.x, 200, '大误差必须吸附到服务端位置');
+});
+
+test('NetWorld：结构变化吸附——分裂后细胞数变了，整组按服务端布局重置', () => {
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    w.myGroup().cells[0].x = 500; // 预测状态乱掉也无所谓
+    // 服务端分裂完成：两颗分身
+    w.applySnapshot(netSnap(10500, [
+        ['p1', 90, 200, 14, 0, 0],
+        ['p1', 110, 200, 14, 0, 0],
+    ]));
+    const cells = w.myGroup().cells;
+    assert.equal(cells.length, 2);
+    assert.equal(cells[0].x, 45, '吸附到服务端位置（量化值 ÷2）');
+    assert.equal(cells[1].x, 55);
 });
 
 // ---------- 运行 ----------

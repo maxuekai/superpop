@@ -26,7 +26,7 @@ import { configHash } from '../src/core/config-hash.js';
 import { World } from '../src/core/world.js';
 
 const TICK_MS = 1000 / 60;
-const SNAPSHOT_EVERY = 3; // 每 3 tick 一帧快照 = 20Hz
+const SNAPSHOT_MS = 50; // 20Hz，按真实时间门控（见下方 lastSnapshotAt）
 const AOI_MARGIN_RATIO = 0.6; // AOI 边距：视口尺寸的 60%，盖住相机死区(35%)与插值余量
 const MAX_PLAYERS = 8; // 人数上限（2026-10-11 产品决策，见 TODO.md M4）
 const NICKNAME_MAX = 12;
@@ -332,6 +332,7 @@ world.onEvent = (event) => {
 let tickCount = 0;
 let lastTickAt = Date.now();
 let accumulator = 0;
+let lastSnapshotAt = 0;
 
 setInterval(() => {
     const now = Date.now();
@@ -348,9 +349,13 @@ setInterval(() => {
         tickCount += 1;
         steps += 1;
     }
-    if (tickCount % SNAPSHOT_EVERY !== 0) {
+    // 快照按真实时间门控（20Hz）：Windows 上 setInterval 实测 ~29ms 才触发一次，
+    // 绑"每 3 次触发发一帧"实际只有 ~12 帧/秒、p95 间隔 244ms，插值缓冲直接被打穿
+    //（客户端看到的就是卡顿+跳帧）。世界步进靠累加器补齐是准的，发射节奏必须另算。
+    if (now - lastSnapshotAt < SNAPSHOT_MS) {
         return;
     }
+    lastSnapshotAt = now;
 
     const { map: currentFood, added } = assignFoodIds();
     const eatenIds = [];
@@ -361,7 +366,7 @@ setInterval(() => {
     }
     lastFoodMap = currentFood;
     const foodDelta = { a: added.map(encodeFood), e: eatenIds };
-    const sendBoard = tickCount % (SNAPSHOT_EVERY * 20) === 0; // 1Hz 排行榜
+    const sendBoard = tickCount % 60 === 0; // 1Hz 排行榜（tickCount = 世界步数，恒 60/s）
 
     for (const [socketId, session] of sessions) {
         const rect = aoiRect(session);

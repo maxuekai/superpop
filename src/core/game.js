@@ -312,6 +312,7 @@ export class Game {
             kills: stats.kills,
             name: this.net ? this.net.world.myName : this.group.name,
             crowned: false,
+            online: !!this.net, // 联机：对局不会因你死亡重开，文案要如实（HUD 换按钮文案）
         };
     }
 
@@ -337,6 +338,7 @@ export class Game {
             kills: stats.kills,
             name: this.net ? this.net.world.myName : this.group.name,
             crowned: true,
+            online: !!this.net,
         });
     }
 
@@ -352,9 +354,9 @@ export class Game {
 
     update(dt) {
         if (this.net) {
-            // 联机：世界在服务端，这里只推进插值渲染与输入上行。
-            // 结算弹层期间（dead/crowned）世界照常走——你能看着对局继续进行。
-            this.net.world.tick(dt);
+            // 联机：世界在服务端。远程球走插值；自己的细胞走本地预测（零输入延迟），
+            // 快照到达时平滑对账。结算弹层期间（dead/crowned）世界照常走——你能看着对局继续。
+            this.net.world.tick(dt, this.input);
             if (this.state === 'playing') {
                 this.net.sendInput(this.input.speedX, this.input.speedY);
             }
