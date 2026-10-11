@@ -27,6 +27,7 @@ import {
     targetAiCount,
 } from '../src/core/rules.js';
 import { clusterOffset, randomFloat, smoothTowards, wheelZoomFactor, zoomTarget } from '../src/core/utils.js';
+import { World } from '../src/core/world.js';
 import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
@@ -665,7 +666,9 @@ test('排行榜：玩家只占一条（按整组质量），AI 各占一条', ()
     const cells = [ball(0, 0, 10, 'me'), ball(0, 0, 20, 'me2')]; // 合计 500
     const a = ball(0, 0, 20, 'a'); // 400
     const b = ball(0, 0, 5, 'b'); // 25
-    const entries = leaderboardEntries(cells, [a, b], 5);
+    // World 把每个玩家组建一行（name/weight/isPlayer），rules 只管排序与名次
+    const rows = [{ name: 'me', weight: groupMass(cells), isPlayer: true }];
+    const entries = leaderboardEntries(rows, [a, b], 5);
     assert.equal(entries.length, 3, '两个分身不能占两行');
     assert.deepEqual(entries.map((e) => e.name), ['me', 'a', 'b']);
     assert.equal(entries[0].isPlayer, true);
@@ -1453,6 +1456,130 @@ test('reset 后出生保护被清掉（由 Game 重新发放）', () => {
     b.grantShield(5, 10);
     b.reset(50, 50, 10);
     assert.equal(b.isProtected(11), false);
+});
+
+// ---------- 无头 World（单机 Game 与联机服务端共用的世界） ----------
+
+test('World：开局铺场，碰撞列表 = 各组存活分身 + AI', () => {
+    const world = new World();
+    assert.equal(world.foodList.length, FOOD.count, '食物按 config 铺满');
+    assert.equal(world.balls.length, 0, '没有组也没有 AI 时没有球');
+    world.addGroup('p', '测试');
+    assert.equal(world.balls.length, 1);
+    world.spawnAi(world.targetAiCount());
+    assert.equal(world.ai.length, AI.minCount, '开局按目标数量放 AI');
+    assert.equal(world.balls.length, 1 + AI.minCount);
+});
+
+test('World：组被全灭 → eaten 事件带死亡瞬间质量与凶手（被吃方与吃人方对应）', () => {
+    const events = [];
+    const world = new World({ onEvent: (e) => events.push(e) });
+    const group = world.addGroup('p', '测试');
+    const cell = group.cells[0];
+    // 一颗稳吃玩家的大球压在出生点上
+    const killer = new Ball(cell.x + 1, cell.y, 100, '#000', '凶手', 'killer-owner');
+    world.balls.push(killer);
+
+    world.update(STEP);
+
+    const eaten = events.filter((e) => e.type === 'eaten');
+    assert.equal(eaten.length, 1, '全灭时恰好一条 eaten 事件');
+    assert.equal(eaten[0].ownerId, 'p');
+    assert.equal(eaten[0].mass, PLAYER.radius ** 2, 'mass 是死亡瞬间的质量，不是清空后的 0');
+    assert.equal(eaten[0].by, killer, '事件要带上是谁吃的');
+    assert.equal(cell.alive, false, '细胞被标记死亡');
+    assert.equal(group.cells.length, 1, '死细胞留在组里（死亡演出期间镜头要跟着它）');
+    // 世界里不再有这个组的活分身，但组还在（等 respawnGroup）
+    assert.equal(world.balls.some((b) => b.ownerId === 'p'), false);
+    assert.ok(world.groups.has('p'));
+});
+
+test('World：称王 → crowned 事件（质量达标 + 当前第一）', () => {
+    const events = [];
+    const world = new World({ onEvent: (e) => events.push(e) });
+    const group = world.addGroup('p', '测试');
+    group.cells[0].r = Math.sqrt(KING.mass); // 30000kg 对应的半径
+
+    world.update(STEP);
+
+    const crowned = events.filter((e) => e.type === 'crowned');
+    assert.equal(crowned.length, 1, '达标且第一时恰好一条 crowned 事件');
+    assert.equal(crowned[0].ownerId, 'p');
+});
+
+test('World：没达标的组不发 crowned 事件', () => {
+    const events = [];
+    const world = new World({ onEvent: (e) => events.push(e) });
+    world.addGroup('p', '测试'); // 出生半径远小于 KING.mass
+    world.update(STEP);
+    assert.equal(events.filter((e) => e.type === 'crowned').length, 0);
+});
+
+test('World：两组各自吃、各自死，事件按 ownerId 区分（联机的核心前提）', () => {
+    const events = [];
+    const world = new World({ onEvent: (e) => events.push(e) });
+    const alpha = world.addGroup('A', '甲组');
+    const beta = world.addGroup('B', '乙组');
+    // 甲组一颗大球，乙组小球贴在它身上
+    alpha.cells[0].r = 100;
+    beta.cells[0].x = alpha.cells[0].x + 1;
+    beta.cells[0].y = alpha.cells[0].y;
+
+    world.update(STEP);
+
+    const eaten = events.filter((e) => e.type === 'eaten');
+    assert.equal(eaten.length, 1);
+    assert.equal(eaten[0].ownerId, 'B', '被全灭的是乙组');
+    assert.equal(alpha.cells[0].alive, true);
+    assert.equal(alpha.stats.kills, 1, '击杀记在凶手组的账上');
+    const playTimeAtDeath = beta.stats.playTime;
+    world.update(STEP);
+    assert.equal(beta.stats.playTime, playTimeAtDeath, '全灭后不再累计存活时长');
+
+    const board = world.leaderboard('A');
+    const myRow = board.find((e) => e.isPlayer);
+    assert.ok(myRow, '本地组（A）在榜上有 isPlayer 标记');
+    assert.equal(board.some((e) => e.name === '乙组'), false, '全灭的组不上榜');
+});
+
+test('World：respawnGroup 重置体型/统计/输入/分裂冷却', () => {
+    const world = new World();
+    const group = world.addGroup('p', '旧名');
+    group.cells[0].r = 80;
+    group.stats.playTime = 33;
+    group.stats.foodEaten = 10;
+    group.stats.kills = 2;
+    group.lastSplitAt = world.time;
+    group.input.speedX = 50;
+
+    world.respawnGroup('p', '新名');
+
+    assert.equal(group.name, '新名');
+    assert.equal(group.cells.length, 1, '重生回到单个细胞');
+    assert.equal(group.cells[0].mass, PLAYER.radius ** 2, '回到出生体重');
+    assert.equal(group.cells[0].name, '新名');
+    assert.deepEqual(group.stats, { playTime: 0, foodEaten: 0, kills: 0 });
+    assert.equal(group.input.speedX, 0);
+    assert.equal(group.lastSplitAt, -Infinity);
+});
+
+test('World：requestSplit 按组输入方向分裂，质量守恒（多组各管各的）', () => {
+    const world = new World();
+    const alpha = world.addGroup('A', '甲组');
+    world.addGroup('B', '乙组');
+    alpha.cells[0].r = 40; // 1600kg
+    alpha.input.speedX = 100;
+
+    assert.equal(world.requestSplit('B'), false, '太小的组分不了');
+    assert.equal(alpha.cells.length, 1, '没请求的组不动');
+    assert.equal(world.requestSplit('A'), true);
+    assert.equal(alpha.cells.length, 2);
+    assert.ok(Math.abs(groupMass(alpha.cells) - 1600) < 1e-9, '分裂质量守恒');
+    assert.equal(alpha.lastSplitAt, world.time);
+    for (const cell of alpha.cells) {
+        assert.equal(cell.mergeAfter, world.time + SPLIT.mergeCooldown, '两半都进合并冷却');
+    }
+    assert.equal(world.balls.filter((b) => b.ownerId === 'A').length, 2, '碰撞列表同步重建');
 });
 
 // ---------- 运行 ----------

@@ -5,7 +5,8 @@ import { clamp, capRadius, distance } from './utils.js';
 // 这样 scripts/rules-test.js 能直接在 node 里测整局流程，而不用起浏览器。
 // Game 只负责调度（准备数据 → 调这里 → 处理结果/渲染）。
 
-// 互吃裁定：返回本帧被吃掉的球，以及每个球吃掉了几个（用于击杀统计）。
+// 互吃裁定：返回本帧被吃掉的球，以及每个球吃掉了几个（用于击杀统计）、
+// 每个受害者是被谁吃掉的（by，Map<victim, eater>，死亡结算/击杀播报用）。
 // 三条规则：
 //   ① 能吃 = 尺寸够（r > 对手r × EAT.ratio）且对手圆心进入自己体内；
 //   ② **被吃掉的球这一帧不能再吃到别人**：先按本帧开始时的尺寸/位置把所有配对算完，
@@ -37,6 +38,7 @@ export function resolveEatings(balls, now) {
 
     // 第二阶段：统一结算（质量吸收在这里才发生）
     const eaten = new Map();
+    const by = new Map();
     const eatenList = [];
     for (const [eater, victim] of pairs) {
         victim.alive = false;
@@ -44,8 +46,9 @@ export function resolveEatings(balls, now) {
         // eatBonus 让 AI 吃人长得更明显（实测不吃倍率时互吃太稀疏、玩家几乎看不到）
         eater.absorb(victim, eater.eatBonus || 1);
         eaten.set(eater, (eaten.get(eater) || 0) + 1);
+        by.set(victim, eater);
     }
-    return { victims: eatenList, eaten };
+    return { victims: eatenList, eaten, by };
 }
 
 // 吃食物：任何球经过就算吃到（各自按 foodGain 长大），被吃的食物立刻补一颗，总量恒定。
@@ -104,16 +107,17 @@ export function splitStatus(cells, now, lastSplitAt) {
     };
 }
 
-// 排行榜：玩家按整组质量算一条，AI 每个球一条，降序取前 N。
-// 玩家已全灭（cells 为空）时不出现在榜上——名次由结算界面显示。
-export function leaderboardEntries(cells, others, size = HUD.leaderboardSize) {
-    const rows = others
-        .filter((ball) => ball.alive)
-        .map((ball) => ({ name: ball.name, weight: ball.mass, isPlayer: false }));
-    if (cells.length > 0) {
-        rows.push({ name: cells[0].name, weight: groupMass(cells), isPlayer: true });
+// 排行榜：rows 是已经折好的「玩家组」行（每个组一条：name / weight / isPlayer），
+// AI 每个球一条，降序取前 N。World 负责把每个玩家组建行（谁是"我"由调用方标注），
+// 这里只管排序与名次——所以玩家全灭（rows 里没有那行）时天然不出现、也不崩。
+export function leaderboardEntries(rows, others, size = HUD.leaderboardSize) {
+    const all = [...rows];
+    for (const ball of others) {
+        if (ball.alive) {
+            all.push({ name: ball.name, weight: ball.mass, isPlayer: false });
+        }
     }
-    return rows
+    return all
         .sort((a, b) => b.weight - a.weight)
         .slice(0, size)
         .map((row, index) => ({
