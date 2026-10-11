@@ -2,7 +2,7 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, KEYS, KING, NAMES, PLAYER, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
+import { AI, EAT, FOOD, JOYSTICK, KEYS, KING, NAMES, PLAYER, SPAWN, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { Camera } from '../src/core/camera.js';
@@ -1576,6 +1576,39 @@ test('World：removeGroup 摘除整组（联机断线清理）', () => {
     assert.equal(world.balls.some((b) => b.ownerId === 'B'), false, '断线者的细胞从碰撞列表消失');
     assert.equal(world.balls.length, ballsBefore - 1);
     assert.equal(world.removeGroup('不存在的组'), false, '重复移除返回 false 而不是抛错');
+});
+
+test('World：重生/进场稀疏选点——在唯一的安全区里落子（真机反馈"重生在少人的地方"）', () => {
+    const world = new World();
+    world.addGroup('p', '测');
+    // 用 r=50 的球铺满世界左侧 3/4（间距 88 < 2r，中间无处可插），只留右侧 x>1000 空旷
+    for (let gx = 150; gx <= 950; gx += 88) {
+        for (let gy = 150; gy <= 1150; gy += 88) {
+            world.balls.push(new Ball(gx, gy, 50, '#fff', '障碍', `block-${gx}-${gy}`));
+        }
+    }
+    // 稀疏选点多次，必须全部落在右侧空旷区（离最近球的边缘最远的地方只剩那里）
+    for (let i = 0; i < 12; i += 1) {
+        const pos = world.safeSpawnPosition(PLAYER.radius, SPAWN.edgeGap, false, true);
+        assert.ok(pos.x > 1000,
+            `稀疏选点该避开球堆落在空旷区，第 ${i} 次实际 (${Math.round(pos.x)},${Math.round(pos.y)})`);
+    }
+});
+
+test('NetWorld：myRank——全场按整组质量排自己的名次（AI 也算）', () => {
+    // 自己 p0 一颗 r=20（400kg）；甲组 r=30（900）压过自己；AI r=10（100）压不过
+    const w = new NetWorld(netWelcome(), netSnap(10000, [
+        ['p1', 100, 200, 60, 0, 0],   // 甲组 900kg
+    ], [['ball1', 500, 500, 20, 0, 2]])); // AI 100kg
+    // 把自己变成 p0 组（welcome 的 selfId 是 p0，但不发自己的细胞——手工补一组）
+    w.applySnapshot(netSnap(10500, [
+        ['p1', 100, 200, 60, 0, 0],
+        ['p0', 300, 300, 40, 0, 0],   // 自己 400kg
+    ]));
+    assert.equal(w.myRank(), 2, '只被甲组压过 → 第 2 名');
+    // 自己吃胖到 1000kg：全场第一
+    w.myGroup().cells[0].r = Math.sqrt(1000);
+    assert.equal(w.myRank(), 1);
 });
 
 test('World：requestSplit 按组输入方向分裂，质量守恒（多组各管各的）', () => {

@@ -47,6 +47,8 @@ export class Game {
 
         this.net = null; // NetSession（联机），attachNet() 注入
         this.netHadCells = false; // 联机：自己的细胞从无到有的瞬间镜头要 snap
+        this.roundCountdown = 0; // 称王终局后的开新局倒计时（联机）
+        this.roundInfo = null;
         this.world = null;
         this.group = null;
 
@@ -168,6 +170,10 @@ export class Game {
         this.net.sendViewport(this.cssWidth, this.cssHeight); // join 时量的尺寸可能还没就绪
         this.updateViewScale(0, true);
         this.hud.hideStart();
+        // 进场时正处上一局的结算倒计时：直接进全场结算界面，等 newRound 开新局
+        if (this.net.world.roundRemaining > 0) {
+            this.onRoundEnded({ ownerId: null, name: null, countdown: this.net.world.roundRemaining });
+        }
     }
 
     onNetEvent(event) {
@@ -177,10 +183,10 @@ export class Game {
                 this.onPlayerEaten(event.mass, event.rank, event.by, event.stats);
             }
         } else if (event.type === 'crowned') {
-            if (this.net && event.ownerId === this.net.world.myOwnerId && this.state === 'playing') {
-                this.onCrowned();
-            }
-            // 别人称王：M1 不做全场结算（M2 的「称王即终局」负责）
+            // 称王即终局：全场结算 + 倒计时自动开新局（M2 定稿，2026-10-11）
+            this.onRoundEnded(event);
+        } else if (event.type === 'newRound') {
+            this.onNewRound();
         } else if (event.type === 'disconnected') {
             this.state = 'menu';
             this.net.disconnect();
@@ -188,6 +194,49 @@ export class Game {
             this.hud.showStart();
             this.hud.showNetError('与服务器的连接已断开');
         }
+    }
+
+    // 称王即终局：所有人（含称王者）进全场结算，倒计时到点服务端重开新局。
+    // 不需要点任何按钮——结算界面的重生按钮会藏起来。
+    onRoundEnded(event) {
+        if (this.state !== 'playing' && this.state !== 'dying') {
+            return;
+        }
+        const isMe = event.ownerId === this.net.world.myOwnerId;
+        const me = this.net.world.myGroup();
+        this.input.speedX = 0;
+        this.input.speedY = 0;
+        this.state = 'crowned'; // 冻结本地输入上行；世界本身已由服务端冻结
+        this.roundCountdown = event.countdown;
+        this.roundInfo = {
+            isMe,
+            winnerName: event.name || null,
+            rank: this.net.world.myRank(),
+        };
+        log(isMe ? '称王' : '本局结束', isMe
+            ? `${Math.round(this.playerMass())}kg，存活 ${me.stats.playTime.toFixed(1)}s`
+            : `${event.name} 称王，我排第 ${this.roundInfo.rank}`, 'warn');
+        this.hud.showSettlement({
+            weight: Math.round(this.playerMass()),
+            rank: this.roundInfo.rank,
+            time: me.stats.playTime,
+            food: me.stats.foodEaten,
+            kills: me.stats.kills,
+            name: this.net.world.myName,
+            crowned: isMe,
+            winnerName: event.name || null,
+            roundSeconds: event.countdown,
+        });
+    }
+
+    // 服务端倒计时到点：全新一局开始（所有人已由服务端重置并发放保护）
+    onNewRound() {
+        this.roundCountdown = 0;
+        this.state = 'playing';
+        this.netHadCells = false; // 新出生的细胞出现时 snap 镜头
+        this.input.speedX = 0;
+        this.input.speedY = 0;
+        this.hud.hideSettlement();
     }
 
     // 当前相机视口（世界坐标），供出生位置判断用
@@ -402,6 +451,11 @@ export class Game {
             for (const ball of this.world.balls) {
                 ball.shielded = ball.alive && ball.isProtected(this.world.time);
             }
+        }
+        // 称王终局的倒计时：每帧递减，整数秒变化时刷新结算界面文案
+        if (this.roundCountdown > 0) {
+            this.roundCountdown = Math.max(0, this.roundCountdown - dt);
+            this.hud.updateRoundCountdown(Math.ceil(this.roundCountdown), this.roundInfo);
         }
         this.updateViewScale(dt);
         this.camera.follow(this.largestCell());

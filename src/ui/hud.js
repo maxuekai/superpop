@@ -36,6 +36,7 @@ export class Hud {
         this.splitBtn = root.querySelector('.division');
         this.splitLabel = root.querySelector('.division-label');
         this.lastSplitLabel = '';
+        this.lastCountdownText = null;
 
         this.menuBtn = root.querySelector('.menu-btn');
 
@@ -279,9 +280,11 @@ export class Hud {
     }
 
     showSettlement(stats) {
-        // 同一个结算界面复用两种结局：被吃掉 / 称王
+        // 同一个结算界面复用三种结局：被吃掉 / 称王（单机）/ 称王即终局（联机全场结算）
         if (this.settleTitleEl) {
-            this.settleTitleEl.textContent = stats.crowned ? '称王！' : '被吃掉了';
+            this.settleTitleEl.textContent = stats.crowned
+                ? '称王！'
+                : (stats.winnerName ? `${stats.winnerName} 称王` : '被吃掉了');
         }
         if (this.settleDetailEl) {
             const base = `吃掉 ${stats.food} 颗食物 · 吞掉 ${stats.kills} 个球`;
@@ -291,9 +294,16 @@ export class Hud {
                 ? `你成了场上最大的球 · ${base}`
                 : (stats.online ? `${base} · 对局仍在继续，按钮让你原地满状态重新进场` : base);
         }
+        // 联机全场结算：倒计时自动开新局，不用点任何东西——重生按钮/输入框藏起来
+        const roundOver = stats.roundSeconds !== undefined;
         if (this.respawnBtn) {
+            this.respawnBtn.classList.toggle('hidden', roundOver);
             this.respawnBtn.textContent = stats.online ? '重新上场' : '再来一局';
         }
+        if (this.respawnInput) {
+            this.respawnInput.classList.toggle('hidden', roundOver);
+        }
+        this.lastCountdownText = null; // 倒计时文案从结算文案起步
         if (this.settleWeightEl) {
             this.settleWeightEl.textContent = String(stats.weight);
         }
@@ -303,11 +313,26 @@ export class Hud {
         if (this.settleTimeEl) {
             this.settleTimeEl.textContent = formatTime(stats.time);
         }
-        if (this.respawnInput) {
+        if (this.respawnInput && !roundOver) {
             this.respawnInput.value = String(stats.name || '').slice(0, NICKNAME.maxLength);
         }
         if (this.settlementOverlay) {
             this.settlementOverlay.classList.remove('hidden');
+        }
+    }
+
+    // 称王终局的倒计时秒数：只在整数秒变化时改 DOM
+    updateRoundCountdown(seconds, info) {
+        if (!this.settleDetailEl || seconds < 0) {
+            return;
+        }
+        const who = info && info.isMe
+            ? '你是这一局之王'
+            : (info && info.winnerName ? `${info.winnerName} 称王 · 你排第 ${info.rank} 名` : '本局结束');
+        const text = `${who} · ${seconds}s 后开新局`;
+        if (text !== this.lastCountdownText) {
+            this.lastCountdownText = text;
+            this.settleDetailEl.textContent = text;
         }
     }
 

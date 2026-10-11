@@ -21,12 +21,14 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 
-import { AI, COLORS, FOOD, JOYSTICK, PLAYER, VIEW, WORLD } from '../src/config.js';
+import { AI, COLORS, FOOD, JOYSTICK, KING, PLAYER, VIEW, WORLD } from '../src/config.js';
+import { groupMass } from '../src/core/rules.js';
 import { configHash } from '../src/core/config-hash.js';
 import { World } from '../src/core/world.js';
 
 const TICK_MS = 1000 / 60;
 const SNAPSHOT_MS = 50; // 20Hz，按真实时间门控（见下方 lastSnapshotAt）
+const ROUND_RESTART_SECONDS = 8; // 称王即终局：全场结算后倒计时多久开新局
 const AOI_MARGIN_RATIO = 0.6; // AOI 边距：视口尺寸的 60%，盖住相机死区(35%)与插值余量
 const MAX_PLAYERS = 8; // 人数上限（2026-10-11 产品决策，见 TODO.md M4）
 const NICKNAME_MAX = 12;
@@ -207,6 +209,32 @@ function findSocketIdByOwner(ownerId) {
     return null;
 }
 
+// ---------- 回合生命周期：称王即终局（2026-10-11 产品决策，见 TODO.md M2） ----------
+// 有人称王 → 全场结算 + 倒计时 → 世界与所有玩家重开全新一局。
+// 没有这套流程的话世界无限累积，后来者"一进去就发现别人已经称王"（真机反馈）。
+let roundState = 'playing'; // 'playing' | 'ending'
+let roundRestartAt = 0;
+
+function roundRemainingSeconds() {
+    return roundState === 'ending'
+        ? Math.max(1, Math.ceil((roundRestartAt - Date.now()) / 1000))
+        : 0;
+}
+
+function startNewRound() {
+    roundState = 'playing';
+    // 所有人先回出生体重、落在稀疏位置（此时大 AI 还在，safeSpawn 会避开它们），
+    // 再重置世界——AI 按重置后的体型（最小档）重新铺场、食物重铺
+    for (const ownerId of [...world.groups.keys()]) {
+        const group = world.groups.get(ownerId);
+        world.respawnGroup(ownerId);
+        group.cells[0].grantShield(PLAYER.spawnShield, world.time);
+    }
+    world.reset();
+    io.emit('newRound', { time: world.time });
+    log(`新的一局开始（场上人类 ${sessions.size}/${MAX_PLAYERS}）`);
+}
+
 io.on('connection', (socket) => {
     let session = null;
 
@@ -235,6 +263,7 @@ io.on('connection', (socket) => {
             food: world.foodList.map(encodeFood),
             roster: buildRoster(),
             board: world.leaderboard(ownerId),
+            roundRemaining: roundRemainingSeconds(), // 中途加入碰上结算期：客户端直接进倒计时
         });
         socket.broadcast.emit('roster', { entries: buildRoster() });
         log(`玩家加入 ${group.name}（${ownerId}），场上人类 ${humans + 1}/${MAX_PLAYERS}`);
@@ -306,6 +335,21 @@ io.on('connection', (socket) => {
         io.emit('roster', { entries: buildRoster() });
         log(`玩家离开 ${group ? group.name : session.ownerId}，场上人类 ${sessions.size}/${MAX_PLAYERS}`);
     });
+
+    // 测试钩子：把自己顶到称王线上，验证"称王即终局"全流程不用真打几分钟。
+    // 仅 SUPERPOP_DEBUG=1 时注册，正常开服没有这条消息面。
+    if (process.env.SUPERPOP_DEBUG === '1') {
+        socket.on('debug:forceCrown', () => {
+            if (!session) {
+                return;
+            }
+            const group = world.groups.get(session.ownerId);
+            if (group && group.cells[0].alive) {
+                group.cells[0].r = Math.sqrt(KING.mass) + 1;
+                log(`[debug] ${group.name} 触发称王判定`);
+            }
+        });
+    }
 });
 
 // ---------- 世界事件 → 客户端 ----------
@@ -321,9 +365,18 @@ world.onEvent = (event) => {
                 stats: myPayload(event.ownerId).stats,
             });
         }
-    } else if (event.type === 'crowned') {
+    } else if (event.type === 'crowned' && roundState === 'playing') {
+        // 称王即终局：全场结算 + 倒计时，倒计时到点由主循环 startNewRound
+        roundState = 'ending';
+        roundRestartAt = Date.now() + ROUND_RESTART_SECONDS * 1000;
         const group = world.groups.get(event.ownerId);
-        io.emit('crowned', { ownerId: event.ownerId, name: group ? group.name : '?' });
+        io.emit('crowned', {
+            ownerId: event.ownerId,
+            name: group ? group.name : '?',
+            mass: Math.round(group ? groupMass(group.cells) : 0),
+            countdown: ROUND_RESTART_SECONDS,
+        });
+        log(`称王即终局：${group ? group.name : event.ownerId} 称王，${ROUND_RESTART_SECONDS}s 后开新局`);
     }
 };
 
@@ -336,6 +389,15 @@ let lastSnapshotAt = 0;
 
 setInterval(() => {
     const now = Date.now();
+    // 结算倒计时到点：重开全新一局。结算期世界冻结，lastTickAt 照常刷新，
+    // 重开后累加器不会一次补上一大截
+    if (roundState === 'ending') {
+        lastTickAt = now;
+        if (now >= roundRestartAt) {
+            startNewRound();
+        }
+        return;
+    }
     accumulator += Math.min(now - lastTickAt, 250); // 挂起恢复：同 Game.loop，不补几百步
     lastTickAt = now;
     let steps = 0;

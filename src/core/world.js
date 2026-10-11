@@ -55,11 +55,11 @@ export class World {
 
     // ---------- 玩家组 ----------
 
-    // 加一个玩家组：落一个安全出生点（不与任何球重叠）。**不发出生保护**——
-    // 保护从「真正进场」那一刻起算（单机是 begin()/respawnPlayer()，联机是服务端放行时），
-    // 调用方拿到返回的组后自己 grantShield。
+    // 加一个玩家组：落一个安全出生点（不与任何球重叠，且尽量挑人少的位置）。
+    // **不发出生保护**——保护从「真正进场」那一刻起算（单机是 begin()/respawnPlayer()，
+    // 联机是服务端放行时），调用方拿到返回的组后自己 grantShield。
     addGroup(ownerId, name) {
-        const pos = this.safeSpawnPosition(PLAYER.radius);
+        const pos = this.safeSpawnPosition(PLAYER.radius, SPAWN.edgeGap, false, true);
         const cell = new Player(name, ownerId);
         cell.x = pos.x;
         cell.y = pos.y;
@@ -86,7 +86,8 @@ export class World {
         if (name) {
             group.name = name;
         }
-        const pos = this.safeSpawnPosition(PLAYER.radius);
+        // 稀疏优先：重生挑离所有球都远的位置（联机真机反馈"重生在少人的地方"）
+        const pos = this.safeSpawnPosition(PLAYER.radius, SPAWN.edgeGap, false, true);
         const cell = new Player(group.name, ownerId);
         cell.x = pos.x;
         cell.y = pos.y;
@@ -189,22 +190,47 @@ export class World {
     // 这里只负责多试几次；margin 还要让出生点远离世界边缘，
     // 否则相机会被钳在边上、球偏在屏幕一角。
     // preferOffscreen=true 时优先挑视口之外的点——AI 在你眼前凭空出现会很像"闪现"。
-    safeSpawnPosition(radius, edgeGap = SPAWN.edgeGap, preferOffscreen = false) {
+    // preferSparse=true 时不取第一个空位，而是在候选里挑「离最近存活球的边缘最远」的：
+    // 玩家重生/进场用——同样的安全，但天然落在人少的位置（真机反馈）。
+    safeSpawnPosition(radius, edgeGap = SPAWN.edgeGap, preferOffscreen = false, preferSparse = false) {
         const margin = radius + 8 + edgeGap;
         // 视口只在真的要"避开视野"时才取——构造早期（相机还没建）玩家组落子会走到这里，
         // 无条件取就会炸；服务端不传 getViewRect，这里天然是 null。
         const view = preferOffscreen && this.getViewRect ? this.getViewRect() : null;
         let fallback = null;
+        let best = null;
+        let bestClearance = -Infinity;
         for (let attempt = 0; attempt < 60; attempt += 1) {
             const pos = this.randomPosition(margin);
-            fallback = pos;
+            if (fallback === null) {
+                fallback = pos;
+            }
             if (!isSpawnClear(pos, radius, this.balls)) {
                 continue;
             }
             if (preferOffscreen && attempt < 40 && !isOutsideView(pos, view, SPAWN.edgeGap)) {
                 continue; // 前 40 次都在找屏幕外的位置
             }
-            return pos;
+            if (!preferSparse) {
+                return pos;
+            }
+            let clearance = Infinity;
+            for (const ball of this.balls) {
+                if (!ball.alive) {
+                    continue;
+                }
+                const d = distance(pos.x, pos.y, ball.x, ball.y) - ball.r;
+                if (d < clearance) {
+                    clearance = d;
+                }
+            }
+            if (clearance > bestClearance) {
+                bestClearance = clearance;
+                best = pos;
+            }
+        }
+        if (preferSparse && best) {
+            return best;
         }
         return fallback || this.randomPosition(margin);
     }

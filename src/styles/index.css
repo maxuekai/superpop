@@ -301,6 +301,12 @@ body {
     display: none;
 }
 
+/* 称王即终局：全场结算期间重生按钮与昵称框藏起来（倒计时自动开新局，不用点） */
+.btn.hidden,
+.nickname.hidden {
+    display: none;
+}
+
 /* 模式选择（单机/联机）：与难度按钮同一套观感，选中态一眼可辨 */
 .mode {
     display: flex;

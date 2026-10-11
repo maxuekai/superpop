@@ -10,6 +10,7 @@
 import { COLORS, FOOD, WORLD } from '../config.js';
 import { Ball } from '../core/ball.js';
 import { configHash } from '../core/config-hash.js';
+import { groupMass } from '../core/rules.js';
 
 const INTERP_DELAY = 0.1; // 远程球渲染滞后于服务端 100ms（5 帧 @20Hz），足够吃掉局域网抖动
 const INPUT_EVERY_FRAMES = 2; // 输入最多 30Hz（按游戏帧计，变化才发，松手必发）
@@ -90,6 +91,7 @@ export class NetSession {
         socket.on('roster', (payload) => this.world.applyRoster(payload.entries));
         socket.on('eaten', (payload) => this.onEvent({ type: 'eaten', ...payload }));
         socket.on('crowned', (payload) => this.onEvent({ type: 'crowned', ...payload }));
+        socket.on('newRound', (payload) => this.onEvent({ type: 'newRound', ...payload }));
         socket.on('left', (payload) => this.onEvent({ type: 'left', ...payload }));
         socket.on('disconnect', () => this.onEvent({ type: 'disconnected' }));
         return this.world;
@@ -208,6 +210,7 @@ export class NetWorld {
         this.samples = new Map(); // key -> [{t,x,y,r}, ≤2]
         this.ghosts = new Map(); // key -> Ball
         this.predictedCells = []; // 自己组的预测细胞（与 groups 里的 ghost 是同一批对象）
+        this.roundRemaining = welcome.roundRemaining || 0; // >0：进场时正处结算倒计时
         for (const [id, qx, qy, ci] of welcome.food) {
             this.foodList.push(decodeFood(id, qx, qy, ci));
         }
@@ -217,6 +220,30 @@ export class NetWorld {
 
     myGroup() {
         return this.groups.get(this.myOwnerId) || null;
+    }
+
+    // 自己的名次（全场按整组质量排，AI 也算）：称王全场结算用
+    myRank() {
+        const mine = this.myGroup();
+        if (!mine) {
+            return null;
+        }
+        const myMass = groupMass(mine.cells);
+        let rank = 1;
+        for (const group of this.groups.values()) {
+            if (group.ownerId === this.myOwnerId) {
+                continue;
+            }
+            if (groupMass(group.cells) > myMass) {
+                rank += 1;
+            }
+        }
+        for (const ai of this.ai) {
+            if (ai.alive && ai.mass > myMass) {
+                rank += 1;
+            }
+        }
+        return rank;
     }
 
     applyRoster(entries) {
