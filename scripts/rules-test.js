@@ -28,6 +28,7 @@ import {
 } from '../src/core/rules.js';
 import { clusterOffset, randomFloat, smoothTowards, wheelZoomFactor, zoomTarget } from '../src/core/utils.js';
 import { World } from '../src/core/world.js';
+import { NetWorld } from '../src/net/client.js';
 import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
 
@@ -1485,7 +1486,9 @@ test('World：组被全灭 → eaten 事件带死亡瞬间质量与凶手（被�
     const eaten = events.filter((e) => e.type === 'eaten');
     assert.equal(eaten.length, 1, '全灭时恰好一条 eaten 事件');
     assert.equal(eaten[0].ownerId, 'p');
-    assert.equal(eaten[0].mass, PLAYER.radius ** 2, 'mass 是死亡瞬间的质量，不是清空后的 0');
+    // 死亡瞬间质量：≥ 出生质量（同 tick 可能先吃到随机食物再被吃），绝不能是清空后的 0
+    assert.ok(eaten[0].mass >= PLAYER.radius ** 2,
+        `死亡瞬间质量不该是 0，实际 ${eaten[0].mass}`);
     assert.equal(eaten[0].by, killer, '事件要带上是谁吃的');
     assert.equal(cell.alive, false, '细胞被标记死亡');
     assert.equal(group.cells.length, 1, '死细胞留在组里（死亡演出期间镜头要跟着它）');
@@ -1542,8 +1545,7 @@ test('World：两组各自吃、各自死，事件按 ownerId 区分（联机的
     assert.equal(board.some((e) => e.name === '乙组'), false, '全灭的组不上榜');
 });
 
-test('World：respawnGroup 重置体型/统计/输入/分裂冷却', () => {
-    const world = new World();
+test('World：respawnGroup 重置体型/统计/输入/分裂冷却', () => {    const world = new World();
     const group = world.addGroup('p', '旧名');
     group.cells[0].r = 80;
     group.stats.playTime = 33;
@@ -1563,6 +1565,19 @@ test('World：respawnGroup 重置体型/统计/输入/分裂冷却', () => {
     assert.equal(group.lastSplitAt, -Infinity);
 });
 
+test('World：removeGroup 摘除整组（联机断线清理）', () => {
+    const world = new World();
+    world.addGroup('A', '甲组');
+    world.addGroup('B', '乙组');
+    world.spawnAi(6);
+    const ballsBefore = world.balls.length;
+    assert.equal(world.removeGroup('B'), true);
+    assert.equal(world.groups.has('B'), false);
+    assert.equal(world.balls.some((b) => b.ownerId === 'B'), false, '断线者的细胞从碰撞列表消失');
+    assert.equal(world.balls.length, ballsBefore - 1);
+    assert.equal(world.removeGroup('不存在的组'), false, '重复移除返回 false 而不是抛错');
+});
+
 test('World：requestSplit 按组输入方向分裂，质量守恒（多组各管各的）', () => {
     const world = new World();
     const alpha = world.addGroup('A', '甲组');
@@ -1580,6 +1595,95 @@ test('World：requestSplit 按组输入方向分裂，质量守恒（多组各�
         assert.equal(cell.mergeAfter, world.time + SPLIT.mergeCooldown, '两半都进合并冷却');
     }
     assert.equal(world.balls.filter((b) => b.ownerId === 'A').length, 2, '碰撞列表同步重建');
+});
+
+// ---------- 联机客户端 NetWorld（快照 → 可渲染世界） ----------
+
+// 造一份 welcome + 首帧快照
+function netWelcome() {
+    return {
+        selfId: 'p1',
+        configHash: 'x',
+        world: { width: 1280, height: 1280 },
+        time: 10,
+        food: [[1, 200, 300, 0], [2, 400, 500, 1], [3, 600, 700, 2]],
+        roster: [['p1', '甲'], ['p2', '乙'], ['ball1', '芋圆']],
+        board: [{ rank: 1, name: '甲', weight: 100, isPlayer: true }],
+    };
+}
+function netSnap(t, cells, ai, food, my) {
+    return {
+        t,
+        cells,
+        ai: ai || [],
+        food: food || { a: [], e: [] },
+        my: my || { stats: { playTime: 1, foodEaten: 2, kills: 0 }, lastSplitAt: -Infinity },
+    };
+}
+
+test('NetWorld：welcome+首帧快照重建世界（多细胞组 / AI / 食物全量 / 花名册）', () => {
+    const w = new NetWorld(netWelcome(), netSnap(10000, [
+        ['p1', 100, 200, 20, 1, 0],
+        ['p1', 140, 200, 20, 0, 0],   // 同组分身：分裂后的第二颗
+        ['p2', 800, 800, 30, 0, 1],
+    ], [['ball1', 500, 500, 40, 0, 2]]));
+    assert.equal(w.myOwnerId, 'p1');
+    assert.equal(w.foodList.length, 3, 'welcome 的食物全量要进世界');
+    assert.equal(w.board.length, 1);
+    assert.equal(w.groups.size, 2);
+    const me = w.myGroup();
+    assert.equal(me.cells.length, 2, '同组两颗分身都要重建出来');
+    assert.equal(me.name, '甲');
+    assert.deepEqual(me.stats, { playTime: 1, foodEaten: 2, kills: 0 }, '自己的组带服务端权威统计');
+    assert.equal(me.lastSplitAt, -Infinity);
+    assert.equal(w.ai.length, 1);
+    assert.equal(w.ai[0].name, '芋圆', 'AI 名字来自花名册');
+    // ghost 位置来自快照量化值（×2 编码）
+    assert.equal(me.cells[0].x, 50);
+    assert.equal(me.cells[0].r, 10);
+});
+
+test('NetWorld：食物增量——被吃的消失、补种的新增（id 稳定）', () => {
+    const w = new NetWorld(netWelcome(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    w.applySnapshot(netSnap(10500, [['p1', 105, 200, 21, 0, 0]], [], { a: [[9, 111, 222, 3]], e: [2] }));
+    assert.equal(w.foodList.length, 3, '吃一颗补一颗，总量恒定');
+    assert.equal(w.foodList.some((f) => f.id === 2), false, '被吃的 id 消失');
+    assert.equal(w.foodList.some((f) => f.id === 9), true, '补种的 id 新增');
+    assert.equal(w.foodList.find((f) => f.id === 1).x, 100, '没动的食物原样保留');
+});
+
+test('NetWorld：tick 插值——ghost 位置朝最新快照推进（渲染时钟独立于快照到达）', () => {
+    const w = new NetWorld(netWelcome(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    // 一秒后的第二帧快照：细胞从 x=50 移到 x=170（快照坐标是 ×2 量化值，340=170 世界单位）
+    w.applySnapshot(netSnap(11000, [['p1', 340, 200, 20, 0, 0]]));
+    const ghost = w.ghosts.get('p1#0');
+    assert.equal(ghost.x, 50, '插值前停在首帧位置');
+    // 渲染时钟落后 100ms：tick 一帧就快进到「最新快照 - 100ms」，位置大幅推进
+    w.tick(1 / 60);
+    assert.ok(ghost.x > 50 && ghost.x < 170, `一帧后应插到两帧之间，实际 ${ghost.x}`);
+    // 推进 45 帧（0.75s）：渲染时钟追平最新快照，位置到位
+    for (let i = 0; i < 44; i += 1) {
+        w.tick(1 / 60);
+    }
+    assert.equal(ghost.x, 170, '渲染时钟追上后应停在最新快照位置');
+});
+
+test('NetWorld：消失的实体被清理（被吃 / 离开 AOI 不留鬼影）', () => {
+    const w = new NetWorld(netWelcome(), netSnap(10000, [
+        ['p1', 100, 200, 20, 0, 0],
+        ['p2', 800, 800, 30, 0, 1],
+    ], [['ball1', 500, 500, 40, 0, 2]]));
+    assert.equal(w.groups.size, 2);
+    assert.equal(w.ai.length, 1);
+    // 下一帧：p2 整组消失、AI 消失（被吃或出视野）
+    w.applySnapshot(netSnap(10500, [['p1', 105, 200, 21, 0, 0]]));
+    assert.equal(w.groups.size, 1);
+    assert.equal(w.groups.has('p2'), false);
+    assert.equal(w.ai.length, 0);
+    assert.equal(w.ghosts.has('p2#0'), false, '鬼影要清掉');
+    assert.equal(w.ghosts.has('ai:ball1'), false);
+    // 自己的组还在
+    assert.equal(w.myGroup().cells.length, 1);
 });
 
 // ---------- 运行 ----------

@@ -31,7 +31,9 @@ import { World } from './world.js';
 // 重生/称王判定）在 core/world.js 的无头世界里，联机服务端跑的就是同一份。
 // 世界事件（被吃/称王）通过 onEvent 回调进来，这里只负责决定"怎么演"。
 export class Game {
-    constructor(canvas, hud) {
+    // online=true 时不在本地建世界（世界在服务端，attachNet() 注入 NetWorld 渲染），
+    // 其余（相机/渲染/输入/HUD）与单机完全共用。
+    constructor(canvas, hud, { online = false } = {}) {
         this.canvas = canvas;
         this.context = canvas.getContext('2d');
         this.hud = hud;
@@ -40,20 +42,20 @@ export class Game {
         this.dyingTimer = 0; // >0 时处于死亡演出（dying）倒计时
         this.settlementStats = null; // 死亡瞬间的结算数据，演出结束后才展示
 
-        // 输入层：摇杆/键盘写这里，再同步给世界里的玩家组
+        // 输入层：摇杆/键盘写这里，再同步给世界（单机写进玩家组，联机发给服务器）
         this.input = { speedX: 0, speedY: 0 };
+
+        this.net = null; // NetSession（联机），attachNet() 注入
+        this.netHadCells = false; // 联机：自己的细胞从无到有的瞬间镜头要 snap
+        this.world = null;
+        this.group = null;
 
         // 相机先于世界：AI 出生"避开视野"要读相机视口（World.getViewRect 回调）
         this.camera = new Camera(0, 0, 0, 0, WORLD.width, WORLD.height, VIEW.cameraDeadZone);
 
-        this.world = new World({
-            getViewRect: () => this.viewRect(),
-            onEvent: (event) => this.onWorldEvent(event),
-        });
-        this.group = this.world.addGroup(PLAYER_OWNER, NICKNAME.defaultName);
-        // 开局按「当前体型对应的目标数量」放 AI，而不是一把放满 AI.count：
-        // 目标数量会随玩家体型从 minCount 涨到 count，开局满屏对手容易被围
-        this.world.spawnAi(this.world.targetAiCount());
+        if (!online) {
+            this.initLocalWorld();
+        }
 
         this.map = new GameMap(WORLD.width, WORLD.height);
 
@@ -73,32 +75,63 @@ export class Game {
         this.loop = this.loop.bind(this);
         this.resize();
 
+        if (this.group) {
+            this.camera.follow(this.largestCell());
+        }
+    }
+
+    // 本地无头世界（单机模式）。联机退出后想再玩单机，begin() 也会现调一次。
+    initLocalWorld() {
+        this.world = new World({
+            getViewRect: () => this.viewRect(),
+            onEvent: (event) => this.onWorldEvent(event),
+        });
+        this.group = this.world.addGroup(PLAYER_OWNER, NICKNAME.defaultName);
+        // 开局按「当前体型对应的目标数量」放 AI，而不是一把放满 AI.count：
+        // 目标数量会随玩家体型从 minCount 涨到 count，开局满屏对手容易被围
+        this.world.spawnAi(this.world.targetAiCount());
         this.camera.follow(this.largestCell());
     }
 
-    // ---------- 本地玩家（一个玩家组的薄封装） ----------
+    // ---------- 本地玩家（单机 = 本地组；联机 = 快照里自己的组） ----------
+
+    myGroup() {
+        if (this.net) {
+            return this.net.world.myGroup();
+        }
+        return this.group;
+    }
+
+    myCells() {
+        const group = this.myGroup();
+        return group ? group.cells : [];
+    }
 
     // 最大的存活分身：镜头、视野缩放都用它（最稳，不会因为分身分散而乱跳）。
     // 全灭后回落到死细胞本身——死亡演出期间镜头要停在原地。
+    // 联机下组短暂缺失（死亡/未收到快照）时退到世界中心的占位球，等下一帧快照。
     largestCell() {
         let best = null;
-        for (const cell of this.group.cells) {
+        const cells = this.myCells();
+        for (const cell of cells) {
             if (cell.alive && (best === null || cell.r > best.r)) {
                 best = cell;
             }
         }
-        return best || this.group.cells[0];
+        return best || cells[0] || { x: WORLD.width / 2, y: WORLD.height / 2, r: PLAYER.radius };
     }
 
     // 玩家整组质量（体重面板/排行榜口径）
     playerMass() {
-        return groupMass(this.group.cells);
+        return groupMass(this.myCells());
     }
 
     // 分裂状态：给 HUD（按钮是否可点、冷却还剩几秒、为什么不能点）。
     // 判定本身在 rules.splitStatus（纯函数、可单测），这里只补上"是否在局内"这一层。
     splitState() {
-        const status = splitStatus(this.group.cells, this.world.time, this.group.lastSplitAt);
+        const time = this.net ? this.net.world.time : this.world.time;
+        const group = this.myGroup();
+        const status = splitStatus(this.myCells(), time, group ? group.lastSplitAt : -Infinity);
         const playing = this.state === 'playing';
         return {
             canSplit: playing && status.canSplit,
@@ -108,11 +141,53 @@ export class Game {
     }
 
     requestSplit() {
-        // 冷却/门槛/上限由 world.requestSplit 把关（联机服务端走同一入口），这里只把关局内
+        // 冷却/门槛/上限由把关方负责（单机 world.requestSplit，联机服务端同一入口），
+        // 这里只把关局内。返回值表示"请求已受理"，分裂本身等服务端/世界结算。
         if (this.state !== 'playing') {
             return false;
         }
+        if (this.net) {
+            this.net.requestSplit();
+            return true;
+        }
         return this.world.requestSplit(PLAYER_OWNER);
+    }
+
+    // ---------- 联机（NetSession 注入，见 src/net/client.js） ----------
+
+    attachNet(session) {
+        this.net = session;
+        session.onEvent = (event) => this.onNetEvent(event);
+    }
+
+    // 从开局界面进入联机对局（session.join() 已完成、NetWorld 已就位）
+    beginOnline() {
+        this.state = 'playing';
+        this.netHadCells = false; // 第一帧快照里细胞出现时 snap 镜头
+        this.netViewportTimer = 0;
+        this.net.sendViewport(this.cssWidth, this.cssHeight); // join 时量的尺寸可能还没就绪
+        this.updateViewScale(0, true);
+        this.hud.hideStart();
+    }
+
+    onNetEvent(event) {
+        if (event.type === 'eaten') {
+            // 服务端权威：结算数据随事件带来（本地路径则是从 myGroup.stats 取）
+            if (this.state === 'playing') {
+                this.onPlayerEaten(event.mass, event.rank, event.by, event.stats);
+            }
+        } else if (event.type === 'crowned') {
+            if (this.net && event.ownerId === this.net.world.myOwnerId && this.state === 'playing') {
+                this.onCrowned();
+            }
+            // 别人称王：M1 不做全场结算（M2 的「称王即终局」负责）
+        } else if (event.type === 'disconnected') {
+            this.state = 'menu';
+            this.net.disconnect();
+            this.net = null;
+            this.hud.showStart();
+            this.hud.showNetError('与服务器的连接已断开');
+        }
     }
 
     // 当前相机视口（世界坐标），供出生位置判断用
@@ -122,8 +197,11 @@ export class Game {
 
     // ---------- 生命周期 ----------
 
-    // 从开局界面进入游戏
+    // 从开局界面进入游戏（单机）
     begin(name, difficulty) {
+        if (!this.world) {
+            this.initLocalWorld(); // 联机退出后回来玩单机：现建本地世界
+        }
         this.setDifficulty(difficulty);
         if (name) {
             this.world.renameGroup(PLAYER_OWNER, name);
@@ -159,11 +237,20 @@ export class Game {
 
     // 结算界面「再来一局」
     respawnPlayer(name) {
+        this.input.speedX = 0;
+        this.input.speedY = 0;
+        if (this.net) {
+            // 联机：不 reset 世界（别人还在玩），重生进正在进行的对局；
+            // 镜头在新细胞出现时 snap（update 里的 netHadCells 转换）
+            this.net.again(name);
+            this.state = 'playing';
+            this.netHadCells = false;
+            this.hud.hideSettlement();
+            return;
+        }
         this.world.respawnGroup(PLAYER_OWNER, name);
         this.world.reset();
         this.state = 'playing';
-        this.input.speedX = 0;
-        this.input.speedY = 0;
         this.group.cells[0].grantShield(PLAYER.spawnShield, this.world.time);
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
@@ -172,10 +259,17 @@ export class Game {
 
     // 左下角「菜单」：结束本局，回到开局界面。
     // state 置回 'menu' 就会停掉 world.update（世界冻结），跟开局界面一致；
-    // 分身/质量/冷却全部由 respawnGroup 清干净，不会带着上一局的巨大体型继续。
+    // 单机的分身/质量/冷却由 respawnGroup 清干净，不会带着上一局的巨大体型继续。
     quitToMenu() {
         this.state = 'menu';
-        this.world.respawnGroup(PLAYER_OWNER);
+        if (this.net) {
+            this.net.disconnect();
+            this.net = null;
+            this.world = null;
+            this.group = null;
+        } else {
+            this.world.respawnGroup(PLAYER_OWNER);
+        }
         this.input.speedX = 0;
         this.input.speedY = 0;
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
@@ -194,24 +288,29 @@ export class Game {
     }
 
     // 整组玩家细胞都被吃光才算死。finalMass 是「死亡瞬间」的质量：
-    // World 在裁定之前取好随事件带来，结算不会显示成 0kg。
+    // 单机由 World 在裁定之前取好随事件带来，联机由服务端发来，结算不会显示成 0kg。
+    // statsOverride：联机时服务端随事件带来的权威统计（本地路径从 myGroup.stats 取）。
     // 死亡不立刻弹结算：先进 'dying' 演出（世界慢放 + 红闪），让玩家看清
     // "是谁、在哪里吃掉了我"，播完由 finishDeath 弹结算。数据在死亡瞬间定格。
-    onPlayerEaten(finalMass, rank, killer) {
+    onPlayerEaten(finalMass, rank, killer, statsOverride = null) {
+        const stats = statsOverride || (this.myGroup() ? this.myGroup().stats : { playTime: 0, foodEaten: 0, kills: 0 });
+        const killerName = killer === null || killer === undefined
+            ? null
+            : (typeof killer === 'string' ? killer : killer.name);
         this.input.speedX = 0;
         this.input.speedY = 0;
         this.state = 'dying';
         this.dyingTimer = DEATH.cueSeconds;
-        log('被吃', `${killer ? `${killer.name} 在 ` : ''}最终 ${Math.round(finalMass)}kg，`
-            + `存活 ${this.group.stats.playTime.toFixed(1)}s`, 'warn');
+        log('被吃', `${killerName ? `${killerName} 在 ` : ''}最终 ${Math.round(finalMass)}kg，`
+            + `存活 ${stats.playTime.toFixed(1)}s`, 'warn');
         this.hud.showDeathFlash();
         this.settlementStats = {
             weight: Math.round(finalMass),
             rank,
-            time: this.group.stats.playTime,
-            food: this.group.stats.foodEaten,
-            kills: this.group.stats.kills,
-            name: this.group.name,
+            time: stats.playTime,
+            food: stats.foodEaten,
+            kills: stats.kills,
+            name: this.net ? this.net.world.myName : this.group.name,
             crowned: false,
         };
     }
@@ -225,31 +324,62 @@ export class Game {
     // 称王：单局的终点（质量达标 + 当前第一），与死亡一样把世界冻住。
     onCrowned() {
         const mass = this.playerMass();
+        const stats = this.myGroup() ? this.myGroup().stats : { playTime: 0, foodEaten: 0, kills: 0 };
         this.input.speedX = 0;
         this.input.speedY = 0;
         this.state = 'crowned';
-        log('称王', `${Math.round(mass)}kg，存活 ${this.group.stats.playTime.toFixed(1)}s`, 'warn');
+        log('称王', `${Math.round(mass)}kg，存活 ${stats.playTime.toFixed(1)}s`, 'warn');
         this.hud.showSettlement({
             weight: Math.round(mass),
             rank: 1,
-            time: this.group.stats.playTime,
-            food: this.group.stats.foodEaten,
-            kills: this.group.stats.kills,
-            name: this.group.name,
+            time: stats.playTime,
+            food: stats.foodEaten,
+            kills: stats.kills,
+            name: this.net ? this.net.world.myName : this.group.name,
             crowned: true,
         });
     }
 
-    // 排行榜数据（本地玩家按整组质量算一条）
+    // 排行榜数据：单机本地算；联机用服务端 1Hz 下发的榜（isPlayer 已按自己标注）
     leaderboard() {
+        if (this.net) {
+            return this.net.world.board;
+        }
         return this.world.leaderboard(PLAYER_OWNER);
     }
 
     // ---------- 逻辑更新 ----------
 
     update(dt) {
-        // 本地输入交给自己的组；世界只在 playing/dying 推进
-        if (this.state === 'playing') {
+        if (this.net) {
+            // 联机：世界在服务端，这里只推进插值渲染与输入上行。
+            // 结算弹层期间（dead/crowned）世界照常走——你能看着对局继续进行。
+            this.net.world.tick(dt);
+            if (this.state === 'playing') {
+                this.net.sendInput(this.input.speedX, this.input.speedY);
+            }
+            // 自己的细胞从无到有（进场/重生）：镜头立刻就位，别从死亡点慢慢飘过去
+            const aliveNow = this.myCells().some((cell) => cell.alive);
+            if (aliveNow && !this.netHadCells) {
+                this.camera.snapTo(this.largestCell());
+            }
+            this.netHadCells = aliveNow;
+            // 视口尺寸周期性重报：resize 事件可能被错过（转屏/地址栏收放/加载期量到 0），
+            // AOI 错了玩家会"看不见被谁吃"，这份保险很便宜（3s 一次）
+            this.netViewportTimer = (this.netViewportTimer || 0) + dt;
+            if (this.netViewportTimer >= 3) {
+                this.netViewportTimer = 0;
+                this.net.sendViewport(this.cssWidth, this.cssHeight);
+            }
+            // 死亡演出计时照走（世界本身在服务端，不受慢放影响——联机先看个意思，M3 再对齐）
+            if (this.state === 'dying') {
+                this.dyingTimer -= dt;
+                if (this.dyingTimer <= 0) {
+                    this.finishDeath();
+                }
+            }
+        } else if (this.state === 'playing') {
+            // 本地输入交给自己的组；世界只在 playing/dying 推进
             this.group.input.speedX = this.input.speedX;
             this.group.input.speedY = this.input.speedY;
             this.world.update(dt);
@@ -265,9 +395,11 @@ export class Game {
                 this.finishDeath();
             }
         }
-        // 出生保护标记：给 draw 画光环用
-        for (const ball of this.world.balls) {
-            ball.shielded = ball.alive && ball.isProtected(this.world.time);
+        if (!this.net) {
+            // 出生保护标记：给 draw 画光环用（联机的 sh 位由服务端随快照下发）
+            for (const ball of this.world.balls) {
+                ball.shielded = ball.alive && ball.isProtected(this.world.time);
+            }
         }
         this.updateViewScale(dt);
         this.camera.follow(this.largestCell());
@@ -280,6 +412,10 @@ export class Game {
     // 它旁边站着谁的，得有一条时间线把当时场上什么情况钉住。
     // 关着日志时这里只多一次 timer 比较，开销可忽略。
     tickDiagnostics(dt) {
+        const world = this.net ? this.net.world : this.world;
+        if (!world) {
+            return; // 联机尚未 attach 时没有可记录的世界
+        }
         this.frameMs = this.frameMs === undefined ? dt * 1000 : this.frameMs * 0.9 + dt * 1000 * 0.1;
         this.snapshotTimer = (this.snapshotTimer || 0) + dt;
         if (this.snapshotTimer < 1) {
@@ -287,17 +423,17 @@ export class Game {
         }
         this.snapshotTimer = 0;
         let top = 0;
-        for (const ai of this.world.ai) {
+        for (const ai of world.ai) {
             if (ai.alive && ai.mass > top) {
                 top = ai.mass;
             }
         }
         logSnapshot(() => ({
             mass: Math.round(this.playerMass()),
-            rank: this.group.cells.some((cell) => cell.alive)
-                ? rankOfGroup(this.playerMass(), this.world.ai)
+            rank: this.myCells().some((cell) => cell.alive)
+                ? rankOfGroup(this.playerMass(), world.ai)
                 : '-',
-            alive: this.world.ai.filter((ai) => ai.alive).length,
+            alive: world.ai.filter((ai) => ai.alive).length,
             topAi: Math.round(top),
             fps: Math.round(1 / dt),
             frameMs: this.frameMs.toFixed(1),
@@ -330,6 +466,10 @@ export class Game {
         // 注意：这里**不**直接 snap。除了首次布局外都交给 update(dt) 平滑逼近——
         // 手机地址栏收放会高频触发 resize，硬赋值就是"视角突然扩大"的元凶。
         this.updateViewScale(0, !this.viewReady);
+        // 联机：视口尺寸变了要告诉服务端（AOI 按同一套公式算每个玩家的视野）
+        if (this.net) {
+            this.net.sendViewport(this.cssWidth, this.cssHeight);
+        }
     }
 
     // 视野缩放：屏幕长边锚定 VIEW.longEdgeWorld 个世界单位，并随体型放大视距。
@@ -368,7 +508,7 @@ export class Game {
 
     // 食物不烤进地图：按视口动态绘制，并按颜色合批
     // （逐颗 beginPath+fill 在 360 颗时会有上千次绘制调用，合批后只调用几次）
-    drawFood(context) {
+    drawFood(context, world) {
         const byColor = new Map();
         // 裁剪边距按抖动后的半径上限算，不然视口边缘的大颗会凭空消失
         const pad = FOOD.radius * (1 + FOOD.radiusJitter);
@@ -377,7 +517,7 @@ export class Game {
         const viewTop = this.camera.yView - pad;
         const viewBottom = this.camera.yView + this.camera.hView + pad;
 
-        for (const food of this.world.foodList) {
+        for (const food of world.foodList) {
             if (food.x < viewLeft || food.x > viewRight || food.y < viewTop || food.y > viewBottom) {
                 continue;
             }
@@ -419,18 +559,33 @@ export class Game {
 
         map.draw(context, camera);
 
-        // 食物（按视口裁剪 + 按颜色合批）
-        this.drawFood(context);
+        // 球的来源：单机是本地 World，联机是快照驱动的 NetWorld（消费面同构）。
+        // 绘制顺序：AI → 远端玩家的组 → 自己的组，保证自己的球始终在最上层。
+        const world = this.net ? this.net.world : this.world;
+        if (world) {
+            // 食物（按视口裁剪 + 按颜色合批）
+            this.drawFood(context, world);
 
-        // 球：先画 AI 再画玩家分身，保证玩家始终在最上层
-        for (const ai of this.world.ai) {
-            if (ai.alive) {
-                ai.draw(context);
+            for (const ai of world.ai) {
+                if (ai.alive) {
+                    ai.draw(context);
+                }
             }
-        }
-        for (const cell of this.group.cells) {
-            if (cell.alive) {
-                cell.draw(context);
+            const myId = this.net ? this.net.world.myOwnerId : PLAYER_OWNER;
+            for (const group of world.groups.values()) {
+                if (group.ownerId === myId) {
+                    continue;
+                }
+                for (const cell of group.cells) {
+                    if (cell.alive) {
+                        cell.draw(context);
+                    }
+                }
+            }
+            for (const cell of this.myCells()) {
+                if (cell.alive) {
+                    cell.draw(context);
+                }
             }
         }
 

@@ -204,7 +204,8 @@ body {
     margin: 0 0 14px;
 }
 
-.diff-btn {
+.diff-btn,
+.mode-btn {
     flex: 1;
     padding: 9px 0;
     border: none;
@@ -216,7 +217,8 @@ body {
     background-color: rgba(255, 255, 255, 0.12);
 }
 
-.diff-btn.active {
+.diff-btn.active,
+.mode-btn.active {
     color: #06231f;
     font-weight: 600;
     background-color: rgba(110, 231, 195, 0.9);
@@ -297,6 +299,28 @@ body {
 
 .overlay.hidden {
     display: none;
+}
+
+/* 模式选择（单机/联机）：与难度按钮同一套观感，选中态一眼可辨 */
+.mode {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 14px;
+}
+
+/* 联机失败/断线提示：小字红色，不弹窗打断 */
+.net-error {
+    margin: -6px 0 12px;
+    font-size: 13px;
+    color: #ff9797;
+}
+
+.net-error.hidden {
+    display: none;
+}
+
+.difficulty.hidden {
+    display: none; /* 联机不收难度参数，整行藏起来（.difficulty 自带 display:flex，得同权重压掉） */
 }
 
 .dialog {

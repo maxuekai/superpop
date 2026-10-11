@@ -62,7 +62,26 @@ window.addEventListener('load', () => {
     // 开局 / 结算界面的按钮把操作转交给游戏。
     // 注意要把 difficulty 一并传下去：曾有一版只写 (name)，难度选择器点了
     // 也不生效（setDifficulty(undefined) 静默回落 normal），纯 UI 自嗨。
-    hud.onStart((name, difficulty) => game.begin(name, difficulty));
+    // 联机走动态 import：单机玩家不付网络层的加载成本。
+    hud.onStart(async (name, difficulty) => {
+        if (hud.mode !== 'online') {
+            game.begin(name, difficulty);
+            return;
+        }
+        hud.showNetError('');
+        try {
+            const { NetSession } = await import('./net/client.js');
+            const session = new NetSession();
+            await session.join({
+                name,
+                viewport: { w: game.cssWidth, h: game.cssHeight },
+            });
+            game.attachNet(session);
+            game.beginOnline();
+        } catch (err) {
+            hud.showNetError(`联机失败：${err.message}`);
+        }
+    });
     hud.onRespawn((name) => game.respawnPlayer(name));
     hud.onSplit(() => game.requestSplit());
     hud.onMenu(() => game.quitToMenu());

@@ -110,6 +110,16 @@ export class World {
         }
     }
 
+    // 移除一个玩家组（联机：玩家断线）。细胞随之从碰撞列表消失，AI 重新补位由
+    // syncAiCount 按「剩余最大人类体型」自然收敛，不需要额外处理。
+    removeGroup(ownerId) {
+        if (!this.groups.delete(ownerId)) {
+            return false;
+        }
+        this.rebuildBalls();
+        return true;
+    }
+
     // 玩家组里最大的存活分身（AI 出生体型的取样口径）
     largestHumanCell() {
         let best = null;
@@ -263,9 +273,18 @@ export class World {
         }
     }
 
-    // 抽一个当前没人用的昵称（同屏出现两个同名会让玩家分不清，规则见 rules.pickFreeName）
+    // 抽一个当前没人用的昵称（同屏出现两个同名会让玩家分不清，规则见 rules.pickFreeName）。
+    // 真人的名字也算"已占用"：AI 叫得跟场上玩家一样，玩家分不清谁是谁。
     pickAiName() {
-        const used = this.ai.filter((ai) => ai.alive).map((ai) => ai.name);
+        const used = [];
+        for (const group of this.groups.values()) {
+            used.push(group.name);
+        }
+        for (const ai of this.ai) {
+            if (ai.alive) {
+                used.push(ai.name);
+            }
+        }
         return pickFreeName(used, NAMES);
     }
 

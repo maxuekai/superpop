@@ -40,6 +40,11 @@
                     视野可缩放：双指捏合，电脑用滚轮或 <strong>+</strong> / <strong>-</strong> 键。</p>
                 <input class="nickname start-nickname" type="text" placeholder="输入昵称" autocomplete="off"
                     enterkeyhint="done">
+                <div class="mode" role="group" aria-label="模式">
+                    <button class="mode-btn active" type="button" data-mode="single">单机</button>
+                    <button class="mode-btn" type="button" data-mode="online">联机</button>
+                </div>
+                <p class="net-error hidden"></p>
                 <div class="difficulty" role="group" aria-label="难度">
                     <button class="diff-btn" type="button" data-diff="easy">简单</button>
                     <button class="diff-btn active" type="button" data-diff="normal">普通</button>

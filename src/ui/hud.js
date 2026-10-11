@@ -42,6 +42,12 @@ export class Hud {
         // 难度选择（开局界面）：纯 UI 状态，点哪个把哪个传给游戏
         this.diffBtns = [...root.querySelectorAll('.diff-btn')];
         this.difficulty = DEFAULT_DIFFICULTY;
+        this.difficultyRow = root.querySelector('.difficulty');
+
+        // 模式选择（单机 / 联机）与联机错误提示
+        this.mode = 'single';
+        this.modeBtns = [...root.querySelectorAll('.mode-btn')];
+        this.netErrorEl = root.querySelector('.net-error');
 
         this.refreshTimer = 0;
         this.lastWeight = -1;
@@ -60,7 +66,11 @@ export class Hud {
         for (const btn of this.diffBtns) {
             btn.addEventListener('click', () => this.pickDifficulty(btn.dataset.diff));
         }
+        for (const btn of this.modeBtns) {
+            btn.addEventListener('click', () => this.pickMode(btn.dataset.mode));
+        }
         this.syncDifficulty();
+        this.syncMode();
         const fire = () => {
             this.releaseFocus();
             handler(this.readName(this.startInput), this.difficulty);
@@ -75,6 +85,31 @@ export class Hud {
                 }
             });
         }
+    }
+
+    // 模式（单机/联机）：联机不收难度参数（服务端固定 normal），难度行藏起来
+    pickMode(mode) {
+        this.mode = mode === 'online' ? 'online' : 'single';
+        this.syncMode();
+        this.showNetError('');
+    }
+
+    syncMode() {
+        for (const btn of this.modeBtns) {
+            btn.classList.toggle('active', btn.dataset.mode === this.mode);
+        }
+        if (this.difficultyRow) {
+            this.difficultyRow.classList.toggle('hidden', this.mode !== 'single');
+        }
+    }
+
+    // 联机失败/断线的提示文案；传空串隐藏
+    showNetError(text) {
+        if (!this.netErrorEl) {
+            return;
+        }
+        this.netErrorEl.textContent = text;
+        this.netErrorEl.classList.toggle('hidden', !text);
     }
 
     pickDifficulty(level) {
