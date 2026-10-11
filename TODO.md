@@ -113,14 +113,23 @@ superpop 待办清单。当前状态：**单机可玩**（移动/吃食物/AI �
 "客户端说了算"的转发器（无权威、无互吃、房间写死、事件名拼错），按新协议重写，
 只保留 express + socket.io 外壳（依赖已验证可用，见下方已完成项）。
 
-### M0 地基：抽 Headless World（纯重构，行为不变）
+### M0 地基：抽 Headless World（纯重构，行为不变）✅ 2026-10-11 完成
 
-- [ ] 把 `Game` 的 updateWorld 部分（食物/AI/互吃/分裂/重生/称王判定）抽成 `core/world.js`：
-      不碰 canvas/hud/camera；事件（被吃/称王/击杀）走回调而不是直接调 hud；
-      `Game` 退化为「状态机 + 调度 + 渲染 + 输入」的壳
-- [ ] 服务端直接 `import` core/rules|ball|ai|utils|config（本来就纯，验证一遍路径/别名没问题）
-- 验收：`npm run verify` 全绿 + 浏览器完整对局（分裂/称王/死亡演出）与重构前一致；
-  respawn-check / endgame-check 体检脚本改跑 World
+- [x] `core/world.js`：食物/AI/玩家组/互吃/分裂/重生/称王全部搬入，不碰 canvas/hud/camera；
+      事件走 `onEvent` 回调（`eaten{ownerId,mass,rank,by}` / `crowned{ownerId}`）；`Game` 退化为
+      「状态机 + 调度 + 渲染 + 输入」的壳。
+      **比原计划多做一步**：World 直接做成了多玩家组（`groups: Map<ownerId, {cells,input,stats}>`），
+      单机只有一个组、行为不变，M1 服务端每个连接 `addGroup` 即可，不用二次重构。
+      细节约定：组被全灭后死细胞留在 `group.cells`（alive=false，死亡演出镜头跟着它），
+      消费方按 alive 过滤；分裂的完整门槛检查收在 `World.requestSplit`（服务端单一入口，
+      球太小时不会烧掉冷却——测试里抓到的坑）；`resolveEatings` 补 `by` 映射（死亡结算要知道被谁吃）。
+- [x] 服务端直接 `import` core/*（全纯、无 DOM 依赖，respawn-check/endgame-check 改跑 World 已验证
+      node 路径没问题）
+- 验收（全过）：`npm run verify` 五层全绿——103/103 规则单测（新增 7 条 World 单测）、
+  11/11 不变量、追击 17/20 在历史区间、觅食比 0.867 锚点不动；
+  respawn-check（8 次重生全活满 60s）/ endgame-check（无"被 AI 卡住"、称王可达）改跑 World 数据正常；
+  浏览器完整回归：开局→分裂→合并→死亡演出（红闪/慢放/结算数据定格死亡瞬间）→再来一局
+  （AI 全部回出生体型）全链路零 JS 报错，截图确认渲染与食物成簇观感正常
 
 ### M1 连接闭环：两个标签页互见
 
