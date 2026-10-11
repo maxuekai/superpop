@@ -1,5 +1,5 @@
 // 零依赖静态文件服务器：开发预览用，不需要 npm install（二维码功能除外，装 qrcode 后启动会生成手机扫码用的二维码图片）
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
@@ -10,8 +10,6 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = process.env.PORT || 3000;
 const qrPath = join(root, 'qr.png');
-// 记录上次二维码指向的 URL：IP 没变就不重复弹图片查看器（开发中服务器经常重启）
-const qrUrlCachePath = join(root, '.qr-last-url');
 
 const contentTypes = {
     '.html': 'text/html; charset=utf-8',
@@ -108,17 +106,10 @@ async function printStartupInfo() {
         await QRCode.toFile(qrPath, url);
         console.log(`二维码图片已生成：${qrPath}`);
 
-        const previous = await readFile(qrUrlCachePath, 'utf8').catch(() => null);
-        if (previous === url) {
-            console.log('（IP 未变化，未重复打开图片；需要时手动打开 qr.png）');
-        } else {
-            await writeFile(qrUrlCachePath, url, 'utf8');
-            openFile(qrPath);
-            console.log('（已自动打开二维码图片，用手机扫屏幕上的码）');
-        }
-
-        // 终端里再打印一份字符二维码作兜底
-        console.log(await QRCode.toString(url, { type: 'terminal', small: true }));
+        // 每次启动都自动打开二维码图片。终端字符画的版本已删：ANSI 颜色码在
+        // 不渲染转义序列的视图里是一堆 [47m 乱码，扫不了还吓人（真机反馈）。
+        openFile(qrPath);
+        console.log('（已自动打开二维码图片，用手机扫屏幕上的码）');
     } catch (err) {
         if (err && err.code === 'MODULE_NOT_FOUND') {
             console.log('（可选 devDependency qrcode 未安装：npm install 后自动生成二维码图片）');

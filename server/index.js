@@ -14,7 +14,7 @@
 // 旧 server 的 registe/create/enter/update（含拼写错误）一并废弃。
 
 import { spawn } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
@@ -38,7 +38,6 @@ const NICKNAME_MAX = 12;
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = process.env.PORT || 3000;
 const qrPath = join(root, 'qr.png');
-const qrUrlCachePath = join(root, '.qr-last-url');
 
 const contentTypes = {
     '.html': 'text/html; charset=utf-8',
@@ -500,12 +499,10 @@ async function printStartupInfo() {
         const { default: QRCode } = await import('qrcode');
         await QRCode.toFile(qrPath, url);
         console.log(`二维码图片已生成：${qrPath}`);
-        const previous = await readFile(qrUrlCachePath, 'utf8').catch(() => null);
-        if (previous !== url) {
-            await writeFile(qrUrlCachePath, url, 'utf8');
-            openFile(qrPath);
-        }
-        console.log(await QRCode.toString(url, { type: 'terminal', small: true }));
+        // 每次启动都自动打开二维码图片。终端字符画的版本已删：ANSI 颜色码在
+        // 不渲染转义序列的视图里是一堆 [47m 乱码，扫不了还吓人（真机反馈）。
+        openFile(qrPath);
+        console.log('（已自动打开二维码图片，用手机扫屏幕上的码）');
     } catch (err) {
         console.log(`（二维码生成失败：${err && err.message}；URL 不受影响）`);
     }
