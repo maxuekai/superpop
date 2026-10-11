@@ -107,7 +107,8 @@ superpop 待办清单。当前状态：**单机可玩**（移动/吃食物/AI �
 
 ## 第二阶段：联机（复用第一阶段玩法代码）
 
-规划定稿（2026-10-11，未开工）。总架构：**服务端权威 + 客户端预测**——服务端跑与单机
+规划定稿（2026-10-11）；M0（Headless World）与 M1（连接闭环）已完成，见下方打勾项。
+总架构：**服务端权威 + 客户端预测**——服务端跑与单机
 完全相同的固定步长世界循环（直接 import core/ 纯逻辑层），客户端只发输入向量与动作请求、
 收快照渲染；本地玩家用同份代码做移动预测，用服务端状态纠偏。旧 `server/index.js` 是
 "客户端说了算"的转发器（无权威、无互吃、房间写死、事件名拼错），按新协议重写，
@@ -131,25 +132,37 @@ superpop 待办清单。当前状态：**单机可玩**（移动/吃食物/AI �
   浏览器完整回归：开局→分裂→合并→死亡演出（红闪/慢放/结算数据定格死亡瞬间）→再来一局
   （AI 全部回出生体型）全链路零 JS 报错，截图确认渲染与食物成簇观感正常
 
-### M1 连接闭环：两个标签页互见
+### M1 连接闭环：两个标签页互见 ✅ 2026-10-11 完成（真机扫码复验待做）
 
-- [ ] 事件协议重设计（废弃 registe/create/enter/update，连拼写错误一起还掉）：
-      C→S `join{name}` / `input{sx,sy}` / `split` / `again`；
-      S→C `welcome{selfId, world, configHash}` / `snapshot{tick, cells[], 食物增量, 榜}` /
-      `eaten{by}` / `crowned` / `left{id}`。定了写进 AGENTS.md
-- [ ] 开局界面加「单机 / 联机」选择；联机客户端走动态 import（单机首屏零开销）
-- [ ] 服务端 60Hz 固定步长跑 World、20Hz 广播快照；远程球按 ~100ms 插值缓冲渲染（不抖）
-- [ ] AOI：服务端按同一套 VIEW 公式算各玩家视野，只广播视口±边距内的实体；
-      食物只发增量（被吃/补种），坐标量化（uint16/uint8）
-- [ ] 客户端远程玩家用 Map 管理（id → 整组细胞，含分身；旧代码只有一个 anotherball 变量）
-- [ ] **局域网扫码即玩（M1 就位，不等 M4）**：游戏服务器同进程托管静态文件 + ws
-      （express.static 白名单沿用 dev-server 的 `/`、`/index.html`、`/src/**`、`/qr.png`，
-      socket.io 在同端口做 ws 升级），并把 dev-server 的局域网 URL 打印 + qr.png 生成搬过来。
-      首发形态就是它：同一 Wi-Fi 下扫码进联机，每个里程碑都用真手机验收。
-      注意：与 `npm run dev` 同抢 3000 端口，二选一跑；新机器首次开服 Windows 防火墙
-      要放行 node（弹窗选"允许"），记入 docs/node-env.md
-- 验收：两标签页两球互见移动、各自吃食物长大、体重面板正确；断线一方广播离开、场上清理；
-  带宽 < 10KB/s/端；**两台手机同 Wi-Fi 扫码能互见互吃**
+- [x] 事件协议重设计（旧 registe/create/enter/update 连拼写错误一起废弃）：
+      C→S `join{name,viewport}` / `input{x,y}` / `split` / `again{name}` / `viewport{w,h}`；
+      S→C `welcome{selfId,time,configHash,world,food,roster,board}` /
+      `snapshot{t,cells[],ai[],food{a,e},board?,my}` / `roster{entries}` / `eaten` / `crowned` / `left{id}` /
+      `rejected{reason}`。唯一权威定义在 server/index.js 头注释，已同步进 AGENTS.md
+- [x] 开局界面「单机 / 联机」选择（联机时难度行隐藏——服务端固定 normal）；
+      联机客户端走动态 import（单机首屏零开销）；socket.io 浏览器端由服务端托管、按需注入
+- [x] 服务端 60Hz 固定步长跑 World（setInterval 累加器，同 Game.loop 的防积压钳制）、
+      20Hz AOI 快照：视口按与客户端同一套 VIEW 公式算（60% 边距盖住相机死区），
+      坐标 ×2 量化、颜色按下标、食物只发增量（稳定 id diff）、排行榜 1Hz；
+      实测带宽 **4661 B/s/端**（< 10KB/s 预算 ✓）。客户端 100ms 插值缓冲渲染（ghost Ball 复用）
+- [x] 客户端远程玩家 Map 管理（ownerId → 组 → cells），NetWorld 与 core/World 消费面同构，
+      Game 的渲染/HUD 代码不感知数据来自网络还是本地；断线 removeGroup + 广播 left/roster
+- [x] **局域网扫码即玩**：联机服务器同进程托管静态文件（白名单沿用 dev-server）+ ws 同端口 +
+      局域网 URL/二维码打印/qr.png。与 npm run dev 同抢 3000 端口，二选一跑；
+      新机器首次开服 Windows 防火墙放行 node（已记 docs/node-env.md 待补）
+- [x] configHash 双端校验（core/config-hash.js 两端共用，join 时比对，不一致当场拒绝）
+- 实测（浏览器双标签页）：互见（双向、名字正确、细胞数同步）、服务端权威成长
+  （dbg 实录 r 10→17→26.5）、AI 猎杀玩家 → eaten 事件 → 死亡演出 → 服务端权威结算
+  （rank/存活时长/体重全对）→ again 重生（服务端日志实证）、分裂门槛服务端把关
+  （r<16 拒绝且不烧冷却）、输入护栏（钳满舵+ε）、视口 3s 重报修 AOI、全程零 JS 报错；
+  单机回归：本地 World/分裂/双分身全灭/结算全链路正常
+- [ ] 真机验收补充项：两台手机同 Wi-Fi 扫码互见互吃；分裂后对端看到两颗细胞的实机观察
+      （机制已由单测覆盖：World 分裂质量守恒 + NetWorld 多细胞快照重建，浏览器环境
+      击杀率太高没追到 r≥17 的现场）
+- 实现期修掉的坑（都进了单测或注释）：welcome 的 configHash 发成了函数本身（序列化成
+  undefined）、welcome.food 没灌进客户端世界、roster 广播载荷形状解错、输入节流用真实时钟
+  在泵帧/高刷下吞掉方向变化（改按游戏帧计）、视口量到 0 导致 AOI 缩到最小（下限钳 300 +
+  客户端 3s 重报）
 
 ### M2 战斗与生命周期
 

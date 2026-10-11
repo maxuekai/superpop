@@ -63,3 +63,10 @@ git config --global https.proxy http://127.0.0.1:7897
 netstat -ano | grep ":3000" | grep LISTENING   # 找到 PID
 taskkill //PID <pid> //F
 ```
+## 联机服务器（npm run server）的防火墙
+
+新机器首次开服，Windows 会弹"是否允许 node 访问网络"——**必须点允许**（至少勾"专用网络"），
+否则手机扫码后页面能开（那是出站）、但 WebSocket 连不上（进不了房）。
+
+- 与 `npm run dev` 同抢 3000 端口，二选一跑；端口占用清理见上一节。
+- 局域网地址以启动时打印的为准（`http://<局域网IP>:3000`），二维码生成需要 devDependency `qrcode`。

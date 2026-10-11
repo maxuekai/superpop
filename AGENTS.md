@@ -9,7 +9,8 @@
 superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃食物变大、大球吃小球、被吃后结算重生。
 原生 ES modules + canvas 2D，**没有构建步骤**，浏览器直接加载源码。
 
-当前状态：单机可玩（AI 对手 / 互吃 / 死亡重生 / 排行榜 / 分裂）。联机未接通（`server/index.js` 只是旧代码平移）。
+当前状态：**单机可玩 + 联机 M1 可玩**（单机：AI 对手 / 互吃 / 死亡重生 / 排行榜 / 分裂；
+联机：`npm run server` 局域网扫码进房，服务端权威 + 快照渲染，见 TODO.md 第二阶段）。
 
 ## 运行
 
@@ -21,7 +22,7 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 | `npm run invariants` | 只跑 config 层硬约束断言（面密度、半径上限、称王门槛可达性…） | 无 |
 | `npm run sim` | AI 逃跑仿真：满舵猎手追击 20 轮，输出存活时间/被吃轮次/被逼墙比例 | 无 |
 | `npm run sim:food` | 食物密度与成长仿真：密度、命中概率、速度剖面、玩家 vs AI 成长对比 | 无 |
-| `npm run server` | 多人联机服务端（express + socket.io），未接通 | 需先 `npm install` |
+| `npm run server` | **联机服务器**：同端口托管静态文件 + ws + 局域网 URL/二维码打印；60Hz 跑 World、20Hz 发快照。与 `npm run dev` 同抢 3000 端口，**二选一跑** | 需先 `npm install`（socket.io） |
 
 **非交互 shell（Agent 跑命令）的坑**：shell 不加载 profile 时 `node/npm` 不在 PATH，且
 `cd` 进仓库会触发 fnm 钩子报错——它返回非零退出码，`cd 仓库 && npm test` 会**整条断掉**。
@@ -55,13 +56,13 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 │   │   ├── rectangle.js  # 矩形工具（within/overlaps）
 │   │   └── utils.js      # 数学、随机、clamp、smoothTowards、zoomTarget、颜色
 │   ├── input/            # joystick.js（浮动摇杆 + 双指捏合缩放）/ keyboard.js（WASD + 动作键 + 缩放键）
-│   ├── ui/hud.js         # DOM 层：体重面板、排行榜、弹层、分裂按钮
+│   ├── ui/hud.js         # DOM 层：体重面板、排行榜、弹层、分裂按钮、单机/联机选择
 │   ├── styles/           # reset.css + index.css
-│   └── net/client.js     # 联机客户端占位（未实现，见 TODO.md 第二阶段规划）
-├── server/               # dev-server.js（开发预览）/ index.js（联机，未接通）
+│   └── net/client.js     # 联机客户端：NetSession（连接/输入/动作）+ NetWorld（快照→插值渲染）
+├── server/               # dev-server.js（开发预览）/ index.js（联机服务器：静态+ws 同端口、60Hz World、20Hz 快照）
 ├── scripts/              # 仿真与检查全套：
 │                         #   args.js（仿真共用 flag 解析 + 撞值护栏）
-│                         #   check.js（语法 + 结构性检查）/ rules-test.js（96 条规则单测）
+│                         #   check.js（语法 + 结构性检查）/ rules-test.js（108 条规则单测）
 │                         #   invariants.js（config 硬约束断言，11 条）
 │                         #   flee-sim.js（追击仿真）/ food-sim.js（觅食仿真）
 │                         #   respawn-check / endgame-check / zoom-report / difficulty-report（体检脚本）
@@ -77,7 +78,17 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 - 界面文案用中文，代码标识符用英文。
 - **玩法逻辑只放在 `core/` 的纯逻辑类里**（不碰 `document`），这样 `rules-test.js` 才能在 node 里直接测；
   `ui/hud.js` 只做 DOM 读写。事件监听目标由构造传入（`new Keyboard(document, ...)`），不要在类里直接摸 `document`。
-- 服务端与客户端的事件名约定：`registe` / `create` / `enter` / `update`（改动需两端同步）。
+- **联机协议（唯一权威定义在 `server/index.js` 头注释，改动需两端同步并更新这里）**：
+  C→S `join{name,viewport}` / `input{x,y}` / `split` / `again{name}` / `viewport{w,h}`；
+  S→C `welcome{selfId,time,configHash,world,food,roster,board}` / `snapshot{t,cells[],ai[],food{a,e},board?,my}` /
+  `roster{entries}` / `eaten{mass,rank,by,stats}` / `crowned{ownerId,name}` / `left{id}` / `rejected{reason}`。
+  旧协议的 `registe`/`create`/`enter`/`update`（含拼写错误）已废弃，别再引用。
+- **联机红线**：世界只在服务端跑（`core/world.js` 同一份）；客户端只是快照渲染 + 输入上行，
+  本地预测是 M3 的事不要提前加。`welcome.configHash` 必须与客户端 `core/config-hash.js` 比对，
+  不一致当场拒绝（两端跑不同数值的 bug 靠手感永远查不出来）。快照坐标是 **×2 量化值**，
+  客户端解码除回 2；颜色按 `COLORS` 下标、名字走 roster（`{entries}` 载荷形状别弄错）。
+  输入节流按**游戏帧数**计（每 3 帧一包），不能用真实时钟——泵帧/高刷/卡顿恢复时
+  真实时钟会把方向变化整段吞掉（实测踩过）。
 - 保持行为等价：改之前先看 TODO.md 对应条目，别顺手改出与记录不符的行为。
 - commit 消息：`feat:` / `fix:` / `docs:` / `refactor:` + 中文标题；**正文写根因与实测数字**
   （"为什么改、凭什么说改对了"），代码与文档分开提交。
