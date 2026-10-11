@@ -83,12 +83,17 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   S→C `welcome{selfId,time,configHash,world,food,roster,board}` / `snapshot{t,cells[],ai[],food{a,e},board?,my}` /
   `roster{entries}` / `eaten{mass,rank,by,stats}` / `crowned{ownerId,name}` / `left{id}` / `rejected{reason}`。
   旧协议的 `registe`/`create`/`enter`/`update`（含拼写错误）已废弃，别再引用。
-- **联机红线**：世界只在服务端跑（`core/world.js` 同一份）；客户端只是快照渲染 + 输入上行，
-  本地预测是 M3 的事不要提前加。`welcome.configHash` 必须与客户端 `core/config-hash.js` 比对，
-  不一致当场拒绝（两端跑不同数值的 bug 靠手感永远查不出来）。快照坐标是 **×2 量化值**，
+- **联机红线**：世界只在服务端跑（`core/world.js` 同一份）；客户端 = 远程球插值渲染 + 输入上行 +
+  **本地移动预测**（自己的细胞用同一套 `Ball.update` 按本地输入即时推进，快照到达时对账：
+  参考点先按快照年龄外推再比对——否则预测会恒定超前 30 单位；小误差拉回 15%/快照、
+  大误差（>半径）或结构变化（分裂/合并/死亡）直接吸附。分裂/被吃不做预测）。
+  `welcome.configHash` 必须与客户端 `core/config-hash.js` 比对，不一致当场拒绝
+  （两端跑不同数值的 bug 靠手感永远查不出来）。快照坐标是 **×2 量化值**，
   客户端解码除回 2；颜色按 `COLORS` 下标、名字走 roster（`{entries}` 载荷形状别弄错）。
-  输入节流按**游戏帧数**计（每 3 帧一包），不能用真实时钟——泵帧/高刷/卡顿恢复时
-  真实时钟会把方向变化整段吞掉（实测踩过）。
+  输入节流按**游戏帧数**计（每 2 帧一包 = 30Hz），不能用真实时钟——泵帧/高刷/卡顿恢复时
+  真实时钟会把方向变化整段吞掉（实测踩过）。服务端快照按**真实时间门控**（50ms）发射，
+  不能绑 setInterval 触发次数——Windows 上它实测 ~29ms 才触发一次，绑次数只有 ~12 帧/秒
+  （p95 间隔 244ms），插值缓冲被打穿就是"联机卡顿"。
 - 保持行为等价：改之前先看 TODO.md 对应条目，别顺手改出与记录不符的行为。
 - commit 消息：`feat:` / `fix:` / `docs:` / `refactor:` + 中文标题；**正文写根因与实测数字**
   （"为什么改、凭什么说改对了"），代码与文档分开提交。
