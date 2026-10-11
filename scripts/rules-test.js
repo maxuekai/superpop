@@ -1767,6 +1767,27 @@ test('NetWorld：结构变化吸附——分裂后细胞数变了，整组按服
     assert.equal(cells[1].x, 55);
 });
 
+test('World：重生空区播种——被吃光的区域要能重新长出食物（防"食物荒漠"漂移）', () => {
+    const world = new World();
+    // 开局铺满后，把世界最左列（x<160）的食物全部清掉：纯邻居锚定的旧机制下
+    // 这里永远没有锚点、永远长不出食物
+    world.seedFood();
+    world.foodList = world.foodList.filter((f) => f.x >= 160);
+    const before = world.foodList.length;
+    // 重生 200 颗：emptyRegionBias=0.25 的概率投给最空格子（左列 8 格全是 0，
+    // 必然命中），期望 ~50 颗落回左列
+    let respawnedInEmpty = 0;
+    for (let i = 0; i < 200; i += 1) {
+        const f = world.spawnFood();
+        if (f.x < 160) {
+            respawnedInEmpty += 1;
+        }
+    }
+    assert.equal(world.foodList.length, before, 'spawnFood 只造一颗，不改变总量（总量恒定是 resolveFoodEating 的事）');
+    assert.ok(respawnedInEmpty >= 20,
+        `空区要被持续播种（期望 ~50，实际 ${respawnedInEmpty}）`);
+});
+
 // ---------- 运行 ----------
 let failed = 0;
 for (const [name, fn] of tests) {

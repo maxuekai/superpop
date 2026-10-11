@@ -278,16 +278,52 @@ export class World {
         return foods;
     }
 
-    // 被吃掉的单颗重生：贴着一颗幸存食物落子并继承它的颜色——
+    // 被吃掉的单颗重生：默认贴着一颗幸存食物落子并继承它的颜色——
     // 簇被吃掉一部分后能从邻居「长回来」，而不是退化成随机散点（颜色一杂成片感就没了）。
-    // 锚点随机选，簇的扩张才均匀；副作用是簇会缓慢变大，一局内幅度很小，且每局 seedFood 重置。
+    // 但纯邻居锚定有个盲区：某片区域被吃光后就永远没有锚点，区域会永久空掉
+    // （实测 8 个 AI 吃 6 分钟，96% 的格子空掉、食物堆进一两个格子）。
+    // 所以按 FOOD.emptyRegionBias 的概率把重生改投「当前最空的格子」——给空区播种，
+    // 播下去的种子之后又能被邻居锚定长成簇。
     spawnFood() {
+        if (Math.random() < FOOD.emptyRegionBias) {
+            const pos = this.sparsestFoodPosition();
+            return this.makeFood(pos.x, pos.y, randomItem(COLORS));
+        }
         const anchor = this.foodList.length > 0 ? randomItem(this.foodList) : null;
         if (!anchor) {
             return this.spawnCluster(1)[0];
         }
         const offset = clusterOffset(FOOD.clusterRadius);
         return this.makeFood(anchor.x + offset.dx, anchor.y + offset.dy, anchor.color);
+    }
+
+    // 8×8 粗网格数一遍当前食物分布，返回「食物最少的格子」里随机一点。
+    // 每次重生都全量数一遍（747 次循环）在重生频率（每秒十几颗）下可忽略。
+    sparsestFoodPosition() {
+        const G = 8;
+        const cellW = this.world.width / G;
+        const cellH = this.world.height / G;
+        const counts = new Array(G * G).fill(0);
+        for (const food of this.foodList) {
+            const gx = Math.min(G - 1, Math.floor(food.x / cellW));
+            const gy = Math.min(G - 1, Math.floor(food.y / cellH));
+            counts[gy * G + gx] += 1;
+        }
+        let min = Infinity;
+        for (const c of counts) {
+            min = Math.min(min, c);
+        }
+        const empties = [];
+        for (let i = 0; i < counts.length; i += 1) {
+            if (counts[i] === min) {
+                empties.push(i);
+            }
+        }
+        const pick = empties[randomInt(empties.length)];
+        return {
+            x: (pick % G) * cellW + randomFloat(0, cellW),
+            y: Math.floor(pick / G) * cellH + randomFloat(0, cellH),
+        };
     }
 
     // 开局铺场：按簇铺满 FOOD.count，最后一簇不足额就少放几颗
