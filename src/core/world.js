@@ -121,17 +121,17 @@ export class World {
         return true;
     }
 
-    // 玩家组里最大的存活分身（AI 出生体型的取样口径）
-    largestHumanCell() {
-        let best = null;
+    // 人类阵营的「发展水平」：整组质量开根成等价半径。**不能用最大分身的半径**——
+    // 分裂是质量守恒的，最大分身会瞬间减半；拿它当口径的话，一次分裂就让
+    // targetAiCount 跨过下档边界、超编机制当场永久移除最大的 AI——玩家在追的
+    // 人机追着追着就消失了（真机反馈 + 无头复现：分裂后 9→8）。
+    // 整组质量分裂不变、死亡归零（死后 AI 按新出生体型重新平衡），正是想要的语义。
+    developmentRadius() {
+        let best = 0;
         for (const group of this.groups.values()) {
-            for (const cell of group.cells) {
-                if (cell.alive && (best === null || cell.r > best.r)) {
-                    best = cell;
-                }
-            }
+            best = Math.max(best, Math.sqrt(groupMass(group.cells)));
         }
-        return best;
+        return best || PLAYER.radius;
     }
 
     // 分身/组增减后要重建碰撞列表（数量很少，直接重算最不容易出错）
@@ -352,11 +352,11 @@ export class World {
 
     // AI 出生半径：跟着场上最大的人类细胞取样（单机就是玩家；分裂后取最大的分身，
     // 否则会被低估）
+    // AI 出生半径：跟着场上人类的发展水平取样（整组质量口径，分裂不变；
+    // 分裂后取样的 AI 不会突然变小）
     aiSpawnRadius(ratio) {
-        const human = this.largestHumanCell();
         const min = PLAYER.radius * AI.spawnRadiusMin;
-        const anchor = human ? human.r : PLAYER.radius;
-        const max = Math.max(min, Math.min(PLAYER.radius * AI.spawnRadiusMax, anchor * ratio));
+        const max = Math.max(min, Math.min(PLAYER.radius * AI.spawnRadiusMax, this.developmentRadius() * ratio));
         return randomFloat(min, max);
     }
 
@@ -371,10 +371,10 @@ export class World {
         }
     }
 
-    // AI 数量随场上最大人类体型动态调整：人越大对手越多，但不超过 AI.count（公式见 rules.js）
+    // AI 数量随场上人类的发展水平动态调整：人越大对手越多，但不超过 AI.count
+    // （公式见 rules.js；口径是 developmentRadius——整组质量，分裂不变）
     targetAiCount() {
-        const human = this.largestHumanCell();
-        return targetAiCount(human ? human.r : PLAYER.radius);
+        return targetAiCount(this.developmentRadius());
     }
 
     syncAiCount() {

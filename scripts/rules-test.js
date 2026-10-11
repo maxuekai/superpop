@@ -1788,6 +1788,26 @@ test('World：重生空区播种——被吃光的区域要能重新长出食物
         `空区要被持续播种（期望 ~50，实际 ${respawnedInEmpty}）`);
 });
 
+test('World：分裂不得减少 AI 数量（发展口径是整组质量，不是最大分身——真机回归）', () => {
+    // r=55 时目标 = minCount + floor(4.5/1.5) = minCount+3；旧口径下分裂把最大分身
+    // 减半到 38.9 → 目标掉到 minCount+1 → 超编机制当场永久移除最大的 AI：
+    // 玩家在追的人机追着追着就消失（真机反馈，无头复现 9→8）
+    const world = new World();
+    const group = world.addGroup('p', '测');
+    group.cells[0].r = 55;
+    world.spawnAi(world.targetAiCount());
+    const before = world.ai.length;
+    assert.equal(world.requestSplit('p'), true);
+    assert.ok(Math.abs(groupMass(group.cells) - 55 * 55) < 1e-9, '分裂质量守恒');
+    // 推过一个 AI 数量同步周期（syncInterval）：旧代码在这里踢人
+    for (let i = 0; i < Math.ceil(AI.syncInterval / STEP) + 1; i += 1) {
+        world.update(STEP);
+    }
+    assert.ok(world.ai.length >= before,
+        `分裂后 AI 不得被超编移除：${before} → ${world.ai.length}`);
+    assert.equal(world.targetAiCount(), AI.minCount + 3, '发展口径分裂后不变（质量守恒）');
+});
+
 // ---------- 运行 ----------
 let failed = 0;
 for (const [name, fn] of tests) {
