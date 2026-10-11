@@ -80,9 +80,16 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   `ui/hud.js` 只做 DOM 读写。事件监听目标由构造传入（`new Keyboard(document, ...)`），不要在类里直接摸 `document`。
 - **联机协议（唯一权威定义在 `server/index.js` 头注释，改动需两端同步并更新这里）**：
   C→S `join{name,viewport}` / `input{x,y}` / `split` / `again{name}` / `viewport{w,h}`；
-  S→C `welcome{selfId,time,configHash,world,food,roster,board}` / `snapshot{t,cells[],ai[],food{a,e},board?,my}` /
-  `roster{entries}` / `eaten{mass,rank,by,stats}` / `crowned{ownerId,name}` / `left{id}` / `rejected{reason}`。
+  S→C `welcome{selfId,time,configHash,world,food,roster,board,roundRemaining}` /
+  `snapshot{t,cells[],ai[],food{a,e},board?,my}` / `roster{entries}` / `eaten{mass,rank,by,stats}` /
+  `crowned{ownerId,name,mass,countdown}` / `newRound{time}` / `left{id}` / `rejected{reason}`。
   旧协议的 `registe`/`create`/`enter`/`update`（含拼写错误）已废弃，别再引用。
+- **回合制（称王即终局，2026-10-11 产品决策）**：有人称王 → 服务端广播 `crowned`（带
+  countdown=8s）→ 世界冻结、所有人看全场结算（重生按钮/输入框藏起来，**不用点任何东西**）→
+  倒计时到点服务端 `startNewRound()`（所有人 respawnGroup 回出生体重 + 稀疏选点 + 保护，
+  world.reset() 重铺 AI 与食物）→ 广播 `newRound`。中途加入者在 welcome.roundRemaining
+  里拿到剩余秒数，直接进结算界面等下一局。测试钩子：`SUPERPOP_DEBUG=1` 下客户端可发
+  `debug:forceCrown` 把自己顶到称王线，验证全流程不用真打几分钟。
 - **联机红线**：世界只在服务端跑（`core/world.js` 同一份）；客户端 = 远程球插值渲染 + 输入上行 +
   **本地移动预测**（自己的细胞用同一套 `Ball.update` 按本地输入即时推进，快照到达时对账：
   参考点先按快照年龄外推再比对——否则预测会恒定超前 30 单位；小误差拉回 15%/快照、
@@ -94,6 +101,8 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   真实时钟会把方向变化整段吞掉（实测踩过）。服务端快照按**真实时间门控**（50ms）发射，
   不能绑 setInterval 触发次数——Windows 上它实测 ~29ms 才触发一次，绑次数只有 ~12 帧/秒
   （p95 间隔 244ms），插值缓冲被打穿就是"联机卡顿"。
+  新增 S→C 事件时**客户端 socket.on 绑定与 Game.onNetEvent 处理器要成对加**——
+  只写处理器不绑监听，事件静默丢失、状态卡死（实测踩过：newRound 漏绑，全场卡在结算）。
 - 保持行为等价：改之前先看 TODO.md 对应条目，别顺手改出与记录不符的行为。
 - commit 消息：`feat:` / `fix:` / `docs:` / `refactor:` + 中文标题；**正文写根因与实测数字**
   （"为什么改、凭什么说改对了"），代码与文档分开提交。
