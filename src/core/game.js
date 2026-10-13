@@ -23,6 +23,10 @@ import { clamp, smoothTowards, zoomTarget } from './utils.js';
 import { log, logSnapshot } from './log.js';
 import { World } from './world.js';
 
+// drawFood 的颜色桶常驻复用：颜色就 COLORS 那几种，帧首把桶清空而不是每帧
+// 新建 Map + 每色一个新数组（747 颗食物 × 高刷屏，纯垃圾回收压力）。
+const foodBuckets = new Map(); // color -> food[]
+
 // 游戏主循环：逻辑按固定步长推进（update），渲染跟随屏幕刷新率（draw）。
 // 状态流转：menu（开局界面，逻辑暂停）→ playing → dying（被吃演出：世界慢放+红闪）
 //          → dead（结算界面，逻辑暂停）→ playing；playing → crowned（称王结算）
@@ -72,6 +76,9 @@ export class Game {
 
         this.accumulator = 0;
         this.lastTime = 0;
+        // 高刷屏空帧跳过重绘：steps===0 时世界/相机/缩放都没动，画面逐像素不变就不画。
+        // 凡是在 update 之外改动画面的路径（resize 清屏、场外事件）都要把它置回 true。
+        this.needsRedraw = true;
 
         this.resize = this.resize.bind(this);
         this.loop = this.loop.bind(this);
@@ -152,7 +159,11 @@ export class Game {
             this.net.requestSplit();
             return true;
         }
-        return this.world.requestSplit(PLAYER_OWNER);
+        const ok = this.world.requestSplit(PLAYER_OWNER);
+        if (ok) {
+            this.needsRedraw = true; // 单机分裂立刻改了细胞布局，不等下一个逻辑步
+        }
+        return ok;
     }
 
     // ---------- 联机（NetSession 注入，见 src/net/client.js） ----------
@@ -169,6 +180,7 @@ export class Game {
         this.netViewportTimer = 0;
         this.net.sendViewport(this.cssWidth, this.cssHeight); // join 时量的尺寸可能还没就绪
         this.updateViewScale(0, true);
+        this.needsRedraw = true;
         this.hud.hideStart();
         // 进场时正处上一局的结算倒计时：直接进全场结算界面，等 newRound 开新局
         if (this.net.world.roundRemaining > 0) {
@@ -177,6 +189,8 @@ export class Game {
     }
 
     onNetEvent(event) {
+        // socket 事件发生在 update 之外（状态/结算层变化），空帧也要重画
+        this.needsRedraw = true;
         if (event.type === 'eaten') {
             // 服务端权威：结算数据随事件带来（本地路径则是从 myGroup.stats 取）
             if (this.state === 'playing') {
@@ -261,6 +275,7 @@ export class Game {
         this.group.cells[0].grantShield(PLAYER.spawnShield, this.world.time);
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
+        this.needsRedraw = true; // 相机 snap 发生在 update 之外，空帧也要立刻重画
         this.hud.hideStart();
     }
 
@@ -303,6 +318,7 @@ export class Game {
         this.group.cells[0].grantShield(PLAYER.spawnShield, this.world.time);
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
+        this.needsRedraw = true;
         this.hud.hideSettlement();
     }
 
@@ -323,6 +339,7 @@ export class Game {
         this.input.speedY = 0;
         this.updateViewScale(0, true); // 重开一局视野立刻就位，不该慢慢推
         this.camera.snapTo(this.largestCell());
+        this.needsRedraw = true;
         this.hud.showStart();
     }
 
@@ -513,6 +530,7 @@ export class Game {
         this.cssHeight = cssHeight;
         this.canvas.width = Math.round(cssWidth * dpr);
         this.canvas.height = Math.round(cssHeight * dpr);
+        this.needsRedraw = true; // 重设 canvas 尺寸会清屏，下一帧必须重画（哪怕 steps===0）
 
         // 保证视口不大于整个世界（否则相机会被钳制出负坐标）。
         // 允许比世界大 VIEW.maxZoomOut 倍：Camera.clampView 在视口超过世界时是"居中"，
@@ -565,7 +583,10 @@ export class Game {
     // 食物不烤进地图：按视口动态绘制，并按颜色合批
     // （逐颗 beginPath+fill 在 360 颗时会有上千次绘制调用，合批后只调用几次）
     drawFood(context, world) {
-        const byColor = new Map();
+        // 常驻桶帧首清空（桶数量 = 颜色数，很小；清空已存在的桶即可）
+        for (const bucket of foodBuckets.values()) {
+            bucket.length = 0;
+        }
         // 裁剪边距按抖动后的半径上限算，不然视口边缘的大颗会凭空消失
         const pad = FOOD.radius * (1 + FOOD.radiusJitter);
         const viewLeft = this.camera.xView - pad;
@@ -577,16 +598,19 @@ export class Game {
             if (food.x < viewLeft || food.x > viewRight || food.y < viewTop || food.y > viewBottom) {
                 continue;
             }
-            let bucket = byColor.get(food.color);
+            let bucket = foodBuckets.get(food.color);
             if (bucket === undefined) {
                 bucket = [];
-                byColor.set(food.color, bucket);
+                foodBuckets.set(food.color, bucket);
             }
             bucket.push(food);
         }
 
         context.lineWidth = 1;
-        for (const [color, list] of byColor) {
+        for (const [color, list] of foodBuckets) {
+            if (list.length === 0) {
+                continue;
+            }
             context.beginPath();
             for (const food of list) {
                 // 先 moveTo 才能让同一路径里每颗食物都是独立子路径；
@@ -612,6 +636,9 @@ export class Game {
         context.save();
         context.scale(dpr * this.scale, dpr * this.scale);
         context.translate(-camera.xView, -camera.yView);
+        // 球名字的文本对齐每帧设一次（Ball.draw 里不再逐球设置）；整个渲染面只有球名字用文字
+        context.textAlign = 'center';
+        context.textBaseline = 'bottom';
 
         map.draw(context, camera);
 
@@ -623,7 +650,7 @@ export class Game {
             this.drawFood(context, world);
 
             for (const ai of world.ai) {
-                if (ai.alive) {
+                if (ai.alive && this.inView(ai)) {
                     ai.draw(context);
                 }
             }
@@ -633,19 +660,30 @@ export class Game {
                     continue;
                 }
                 for (const cell of group.cells) {
-                    if (cell.alive) {
+                    if (cell.alive && this.inView(cell)) {
                         cell.draw(context);
                     }
                 }
             }
             for (const cell of this.myCells()) {
-                if (cell.alive) {
+                if (cell.alive && this.inView(cell)) {
                     cell.draw(context);
                 }
             }
         }
 
         context.restore();
+    }
+
+    // 圆-视口相交判断：屏外的球不画。余量要盖住超出圆本体的部分——
+    // 保护光环（1.28r + 线宽）与名字文字（最高约 0.7r + 4），取 0.8r + 8 世界单位。
+    inView(ball) {
+        const r = ball.displayR;
+        const pad = r * 0.8 + 8;
+        return ball.x + r + pad >= this.camera.xView
+            && ball.x - r - pad <= this.camera.xView + this.camera.wView
+            && ball.y + r + pad >= this.camera.yView
+            && ball.y - r - pad <= this.camera.yView + this.camera.hView;
     }
 
     // ---------- 主循环 ----------
@@ -670,7 +708,18 @@ export class Game {
             this.accumulator = 0;
         }
 
-        this.draw();
+        // 高刷屏空帧跳过重绘：固定步长 60Hz 下，120Hz 设备一半的 rAF 帧 steps===0，
+        // 此时世界/相机/缩放都没动过——联机插值也在 NetWorld.tick 里随 update 推进，
+        // 不在 draw 路径上——画面逐像素不变，重画纯属浪费。例外：resize 清过屏
+        // （needsRedraw），或场外事件改了要画的东西（联机快照到达置 world.dirty）。
+        const netDirty = this.net && this.net.world ? this.net.world.dirty : false;
+        if (steps > 0 || this.needsRedraw || netDirty) {
+            this.draw();
+            this.needsRedraw = false;
+            if (netDirty) {
+                this.net.world.dirty = false;
+            }
+        }
         window.requestAnimationFrame(this.loop);
     }
 

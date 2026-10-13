@@ -1,6 +1,29 @@
 import { EAT, FOOD, PLAYER, SPLIT } from '../config.js';
-import { distance, capRadius, shadeColor } from './utils.js';
+import { distance, distanceSq, capRadius, shadeColor } from './utils.js';
 import { log } from './log.js';
+
+// 球体渐变按颜色缓存：颜色就 COLORS 那几种，而每个球每帧 createRadialGradient +
+// 3 次 addColorStop + shadeColor 字符串解析，20 球 × 高刷就是每秒数千个原生渐变对象。
+// 缓存的是**单位圆局部坐标系**的渐变与描边色（与位置/半径/dpr 无关），
+// 画球时 translate(x,y) + scale(r,r) 上去即可，与世界坐标渐变逐像素等价。
+const paintCache = new Map(); // bColor -> { fill: CanvasGradient, edge: string }
+
+function ballPaint(context, bColor) {
+    let paint = paintCache.get(bColor);
+    if (!paint) {
+        const fill = context.createRadialGradient(-0.35, -0.35, 0.1, 0, 0, 1);
+        fill.addColorStop(0, shadeColor(bColor, 0.55));
+        fill.addColorStop(0.75, bColor);
+        fill.addColorStop(1, shadeColor(bColor, -0.25));
+        paint = { fill, edge: shadeColor(bColor, -0.35) };
+        paintCache.set(bColor, paint);
+    }
+    return paint;
+}
+
+// ctx.font 每帧重新赋值会触发字体解析：量化到整数 px 后按串缓存，相同就跳过。
+// 只有球名字用 canvas 文字，一份全局缓存就够（textAlign/textBaseline 由 Game.draw 每帧统一设）。
+let lastNameFont = '';
 
 // 所有小球（玩家和 AI）的共同基类：移动、边界钳制、视觉回弹、进食与互吃判定、绘制。
 // 球本身不产生速度：speedX/speedY 由外部写入（摇杆写玩家，AI 决策写自己），
@@ -122,9 +145,10 @@ export class Ball {
         this.rVel += kick;
     }
 
-    // 吃食物：圆心距不超过半径 + 食物半径即吃到
+    // 吃食物：圆心距不超过半径 + 食物半径即吃到（平方距离比较，数学等价）
     canEatFood(foodX, foodY) {
-        return distance(this.x, this.y, foodX, foodY) <= this.r + FOOD.radius;
+        const reach = this.r + FOOD.radius;
+        return distanceSq(this.x, this.y, foodX, foodY) <= reach * reach;
     }
 
     // 尺寸是否够吃对方（只看大小，不看距离，也不看是不是自己的分身）
@@ -158,34 +182,32 @@ export class Ball {
 
     // 立体细胞质感：径向渐变（左上受光、右下渐暗）+ 暗描边 + 高光点
     // displayR 是带弹簧回弹的视觉半径（纯表现，碰撞半径仍是 this.r）
-    // 调用处需已把上下文平移到世界坐标系
+    // 调用处需已把上下文平移到世界坐标系。
+    // 球体部分在「单位圆局部坐标系」里画（渐变/高光按颜色缓存复用），
+    // 光环与名字不便走单位圆的，restore 后回到原坐标系画，观感与旧实现逐像素等价。
     draw(context) {
         const visualR = this.displayR;
-        const gradient = context.createRadialGradient(
-            this.x - visualR * 0.35,
-            this.y - visualR * 0.35,
-            visualR * 0.1,
-            this.x,
-            this.y,
-            visualR,
-        );
-        gradient.addColorStop(0, shadeColor(this.bColor, 0.55));
-        gradient.addColorStop(0.75, this.bColor);
-        gradient.addColorStop(1, shadeColor(this.bColor, -0.25));
-        context.fillStyle = gradient;
+        const paint = ballPaint(context, this.bColor);
+
+        context.save();
+        context.translate(this.x, this.y);
+        context.scale(visualR, visualR);
+        context.fillStyle = paint.fill;
         context.beginPath();
-        context.arc(this.x, this.y, visualR, 0, Math.PI * 2);
+        context.arc(0, 0, 1, 0, Math.PI * 2);
         context.closePath();
         context.fill();
 
-        context.strokeStyle = shadeColor(this.bColor, -0.35);
-        context.lineWidth = Math.max(1.5, visualR * 0.06);
+        // 描边线宽先按世界口径算（含 1.5 下限），再除回单位圆坐标系
+        context.strokeStyle = paint.edge;
+        context.lineWidth = Math.max(1.5, visualR * 0.06) / visualR;
         context.stroke();
 
         context.beginPath();
-        context.arc(this.x - visualR * 0.38, this.y - visualR * 0.42, visualR * 0.16, 0, Math.PI * 2);
+        context.arc(-0.38, -0.42, 0.16, 0, Math.PI * 2);
         context.fillStyle = 'rgba(255, 255, 255, 0.5)';
         context.fill();
+        context.restore();
 
         // 出生保护：外圈画一圈光环
         if (this.shielded) {
@@ -198,9 +220,11 @@ export class Ball {
 
         // 名字浮在球上方
         if (this.name) {
-            context.font = `600 ${Math.max(7, visualR * 0.5)}px -apple-system, BlinkMacSystemFont, sans-serif`;
-            context.textAlign = 'center';
-            context.textBaseline = 'bottom';
+            const font = `600 ${Math.max(7, Math.round(visualR * 0.5))}px -apple-system, BlinkMacSystemFont, sans-serif`;
+            if (font !== lastNameFont) {
+                context.font = font;
+                lastNameFont = font;
+            }
             context.fillStyle = 'rgba(255, 255, 255, 0.92)';
             context.fillText(this.name, this.x, this.y - visualR - Math.max(4, visualR * 0.18));
         }

@@ -10,6 +10,14 @@ export function distance(x1, y1, x2, y2) {
     return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));
 }
 
+// 平方距离：只用于「距离 vs 阈值」的比较（省去 sqrt，结果严格等价）。
+// 距离值本身要参与加权/归一化的场合不能用这个。
+export function distanceSq(x1, y1, x2, y2) {
+    const dx = x1 - x2;
+    const dy = y1 - y2;
+    return dx * dx + dy * dy;
+}
+
 // 摇杆头超出圆形范围时，沿当前方向固定在边缘位置
 export function edgeOffsetX(x, y, radius = JOYSTICK.radius) {
     return radius * Math.cos(Math.atan2(y, x));

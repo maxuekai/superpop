@@ -51,13 +51,14 @@ export function resolveEatings(balls, now) {
     return { victims: eatenList, eaten, by };
 }
 
-// 吃食物：任何球经过就算吃到（各自按 foodGain 长大），被吃的食物立刻补一颗，总量恒定。
+// 吃食物：任何球经过就算吃到（各自按 foodGain 长大），被吃的食物**原位替换**成
+// makeFood() 补的新颗，列表长度恒定（不每 tick 重建 747 槽的数组）。
 // makeFood 由调用方提供（Game 里要避开所有球、还要用到世界尺寸）。
-// 返回新的食物列表与每球吃到几颗。
+// 返回（同一个）食物列表与每球吃到几颗。
 export function resolveFoodEating(foodList, balls, makeFood) {
-    const kept = [];
     const eaten = new Map();
-    for (const food of foodList) {
+    for (let i = 0; i < foodList.length; i += 1) {
+        const food = foodList[i];
         let eater = null;
         for (const ball of balls) {
             if (ball.alive && ball.canEatFood(food.x, food.y)) {
@@ -70,12 +71,10 @@ export function resolveFoodEating(foodList, balls, makeFood) {
             eater.r = capRadius(eater.r + eater.foodGain);
             eater.onEat();
             eaten.set(eater, (eaten.get(eater) || 0) + 1);
-            kept.push(makeFood());
-        } else {
-            kept.push(food);
+            foodList[i] = makeFood();
         }
     }
-    return { foodList: kept, eaten };
+    return { foodList, eaten };
 }
 
 // 名次：按传入的整组质量比（死亡时要用「死亡瞬间」的质量，不能用清空后的 0）。

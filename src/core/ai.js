@@ -1,6 +1,6 @@
 import { AI, JOYSTICK } from '../config.js';
 import { Ball } from './ball.js';
-import { distance, randomFloat } from './utils.js';
+import { distance, distanceSq, randomFloat } from './utils.js';
 
 // AI 小球：继承 Ball，只加一层「决策」。
 // 决策优先级：逃离更大的球 > 追击更小的球（含玩家）> 觅食 > 随机游走。
@@ -55,37 +55,40 @@ export class AiPlayer extends Ball {
         }
 
         let threat = null;
-        let threatDist = Infinity;
+        let threatDistSq = Infinity;
         let prey = null;
-        let preyDist = Infinity;
+        let preyDistSq = Infinity;
+        const fleeRangeSq = AI.fleeRange * AI.fleeRange;
+        const chaseRangeSq = AI.chaseRange * AI.chaseRange;
 
         for (const other of balls) {
             if (other === this || !other.alive) {
                 continue;
             }
-            const d = distance(this.x, this.y, other.x, other.y);
+            // 这里只比大小、不取距离值，用平方距离省掉 sqrt（热循环：球数²每帧）
+            const dSq = distanceSq(this.x, this.y, other.x, other.y);
             if (other.outweighs(this)) {
-                if (d < AI.fleeRange && d < threatDist) {
+                if (dSq < fleeRangeSq && dSq < threatDistSq) {
                     threat = other;
-                    threatDist = d;
+                    threatDistSq = dSq;
                 }
-            } else if (this.outweighs(other) && d < AI.chaseRange && d < preyDist && !claimedBalls.has(other)) {
+            } else if (this.outweighs(other) && dSq < chaseRangeSq && dSq < preyDistSq && !claimedBalls.has(other)) {
                 prey = other;
-                preyDist = d;
+                preyDistSq = dSq;
             }
         }
 
         // 最近的食物：不管在不在逃都算一份，逃跑时用来「顺手把路边的吃掉」
         let nearestFood = null;
-        let nearestFoodDist = Infinity;
+        let nearestFoodDistSq = Infinity;
         for (const food of foodList) {
             if (claimedFood.has(food)) {
                 continue; // 已经有人在路上了
             }
-            const d = distance(this.x, this.y, food.x, food.y);
-            if (d < nearestFoodDist) {
+            const dSq = distanceSq(this.x, this.y, food.x, food.y);
+            if (dSq < nearestFoodDistSq) {
                 nearestFood = food;
-                nearestFoodDist = d;
+                nearestFoodDistSq = dSq;
             }
         }
         // 试过给食物目标加滞后（"已在追的食物没远出 N 倍就不换"），比值纹丝不动
@@ -102,7 +105,9 @@ export class AiPlayer extends Ball {
             this.targetFood = null;
             this.fleeing = true;
             // 近处有食物就带上它：逃跑方向会顺便往它那边偏一点
-            this.escapeFood = nearestFood && nearestFoodDist <= AI.escapeFoodRange ? nearestFood : null;
+            this.escapeFood = nearestFood && nearestFoodDistSq <= AI.escapeFoodRange * AI.escapeFoodRange
+                ? nearestFood
+                : null;
             return;
         }
         if (prey) {
