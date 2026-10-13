@@ -103,6 +103,9 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   （p95 间隔 244ms），插值缓冲被打穿就是"联机卡顿"。
   新增 S→C 事件时**客户端 socket.on 绑定与 Game.onNetEvent 处理器要成对加**——
   只写处理器不绑监听，事件静默丢失、状态卡死（实测踩过：newRound 漏绑，全场卡在结算）。
+  结算期（ending）世界冻结但**快照照常发射**——中途加入者的 `firstSnapshot()` 靠它进结算界面，
+  别把 ending 分支改回"return 不发"。C→S 全消息面有令牌桶限频（input 60/s、其余 10/s），
+  超限静默丢包；`again` 服务端校验无存活细胞才放行（否则活着能刷重生+护盾）。
 - 保持行为等价：改之前先看 TODO.md 对应条目，别顺手改出与记录不符的行为。
 - commit 消息：`feat:` / `fix:` / `docs:` / `refactor:` + 中文标题；**正文写根因与实测数字**
   （"为什么改、凭什么说改对了"），代码与文档分开提交。
