@@ -86,13 +86,26 @@ window.addEventListener('load', () => {
     hud.onSplit(() => game.requestSplit());
     hud.onMenu(() => game.quitToMenu());
 
-    // 窗口尺寸 / 屏幕方向变化时重算画布与视口
-    window.addEventListener('resize', game.resize);
-    window.addEventListener('orientationchange', game.resize);
+    // 窗口尺寸 / 屏幕方向变化时重算画布与视口。
+    // 转屏、地址栏收放会同帧触发 resize / orientationchange / visualViewport.resize 中的多个，
+    // 用 rAF 去抖：同帧只跑一次，跨帧的连续变化（地址栏动画）仍然每帧都响应。
+    let resizeScheduled = false;
+    const scheduleResize = () => {
+        if (resizeScheduled) {
+            return;
+        }
+        resizeScheduled = true;
+        requestAnimationFrame(() => {
+            resizeScheduled = false;
+            game.resize();
+        });
+    };
+    window.addEventListener('resize', scheduleResize);
+    window.addEventListener('orientationchange', scheduleResize);
     // 手机上地址栏收放会改变可视视口高度，但不一定触发 window.resize；
     // 漏了这次重算，画布尺寸就和显示尺寸对不上（球变形 + 镜头错位）
     if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', game.resize);
+        window.visualViewport.addEventListener('resize', scheduleResize);
     }
 
     game.start();

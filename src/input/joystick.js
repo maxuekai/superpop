@@ -96,9 +96,7 @@ export class Joystick {
         }
     }
 
-    handleEvent(e) {
-        const event = e || window.event;
-
+    handleEvent(event) {
         switch (event.type) {
             case 'touchstart':
                 // 界面上的触摸不接管，也不阻止默认行为（按钮点击、输入框聚焦要留给界面）
@@ -114,12 +112,12 @@ export class Joystick {
                     const second = event.changedTouches[0];
                     const first = this.findTouch(event.touches, this.touchId);
                     if (first) {
-                        e.preventDefault();
+                        event.preventDefault();
                         this.startPinch(first, second);
                     }
                     return;
                 }
-                e.preventDefault();
+                event.preventDefault();
                 {
                     const touch = event.changedTouches[0];
                     this.touchId = touch.identifier;
@@ -141,7 +139,7 @@ export class Joystick {
                 if (this.pinch !== null) {
                     const moved = event.changedTouches[0];
                     if (moved.identifier === this.pinch.idA || moved.identifier === this.pinch.idB) {
-                        e.preventDefault();
+                        event.preventDefault();
                         this.pinchMove(event);
                     }
                     return;
@@ -159,7 +157,7 @@ export class Joystick {
                     if (!touch) {
                         return;
                     }
-                    e.preventDefault();
+                    event.preventDefault();
                     // 手指相对按下原点的位置
                     const tempX = touch.clientX - this.originX;
                     const tempY = touch.clientY - this.originY;
