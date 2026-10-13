@@ -1753,9 +1753,37 @@ test('NetWorld：对账——小误差按比例拉回，大误差直接吸附（
     assert.equal(cell.x, 200, '大误差必须吸附到服务端位置');
 });
 
+test('NetWorld：对账参考点按快照年龄外推（快照在途几十 ms，age 不能恒为 0）', () => {
+    // 假时钟注入：偏移估计取窗口最大值（min 在途延迟滤波），所以"快照年龄"=
+    // 本帧比最快帧多花的在途时间。构造期用的是真实时钟，清掉窗口重新同步。
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 400, 200, 20, 0, 0]]));
+    let fakeNow = 100;
+    w.now = () => fakeNow;
+    w.offsetWindow = [];
+    // 基准帧：服务端 10.0s，本地 100.0 到达（在途最快的一帧）
+    w.applySnapshot(netSnap(10000, [['p1', 400, 200, 20, 0, 0]]));
+    // 下一帧：服务端 0.5s 走了 10 单位（速度 20/s），路上多花 80ms（本地 100.58 才到）
+    fakeNow = 100.58;
+    w.applySnapshot(netSnap(10500, [['p1', 420, 200, 20, 0, 0]]));
+    const s = w.referenceSample('p1#0');
+    assert.ok(Math.abs(s.x - 211.6) < 1e-9,
+        `参考点该外推到"现在"（210 + 20/s × 0.08s = 211.6），实际 ${s.x}`);
+    // 外推上限 250ms：晚到 1s+ 也只外推 0.25s（服务端继续 20/s 移动到 220）
+    fakeNow = 102.08;
+    w.applySnapshot(netSnap(11000, [['p1', 440, 200, 20, 0, 0]]));
+    const clamped = w.referenceSample('p1#0');
+    assert.ok(Math.abs(clamped.x - 225) < 1e-9,
+        `外推该钳在 250ms（220 + 20/s × 0.25s = 225），实际 ${clamped.x}`);
+});
+
 test('NetWorld：结构变化吸附——分裂后细胞数变了，整组按服务端布局重置', () => {
     const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
     w.myGroup().cells[0].x = 500; // 预测状态乱掉也无所谓
+    // 假时钟钉住：referenceSample 会按「快照年龄」外推（age = 到达时刻+offset − 样本时刻），
+    // 真实时钟下两次调用之间流出几微秒，期望的精确值 45 就会漂成 44.9999…。
+    // 偏移估计取窗口最大值，构造期真实时钟的样本会让钉住的时钟"晚到"几秒，一并清掉
+    w.now = () => 100;
+    w.offsetWindow = [];
     // 服务端分裂完成：两颗分身
     w.applySnapshot(netSnap(10500, [
         ['p1', 90, 200, 14, 0, 0],

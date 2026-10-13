@@ -49,6 +49,9 @@ export class World {
         this.getViewRect = options.getViewRect || null;
         this.onEvent = options.onEvent || (() => {});
         this.syncTimer = 0;
+        // roster 变更标记（AI 出生/重生改名/超编移除、玩家改名）：联机服务端读完清掉，
+        // 随下一快照周期广播一次 roster。纯逻辑层只管置位，不碰网络。
+        this.rosterDirty = false;
 
         this.seedFood();
     }
@@ -85,6 +88,7 @@ export class World {
         }
         if (name) {
             group.name = name;
+            this.rosterDirty = true; // 联机：改名要随下一快照周期广播 roster
         }
         // 稀疏优先：重生挑离所有球都远的位置（联机真机反馈"重生在少人的地方"）
         const pos = this.safeSpawnPosition(PLAYER.radius, SPAWN.edgeGap, false, true);
@@ -368,6 +372,7 @@ export class World {
             ai.foodGain = AI.foodGain;
             this.ai.push(ai);
             this.balls.push(ai);
+            this.rosterDirty = true;
         }
     }
 
@@ -399,6 +404,7 @@ export class World {
             victim.respawnAt = Infinity;
             this.ai = this.ai.filter((ai) => ai !== victim);
             this.balls = this.balls.filter((ball) => ball !== victim);
+            this.rosterDirty = true;
         }
     }
 
@@ -412,6 +418,7 @@ export class World {
         ai.targetFood = null;
         ai.escapeFood = null;
         ai.grantShield(AI.respawnShield, this.time);
+        this.rosterDirty = true; // 重生改名，联机要广播 roster
     }
 
     updateRespawn() {
@@ -524,7 +531,7 @@ export class World {
         }
     }
 
-    // 吃食物：任何球吃到都立刻在别处补一颗（判定在 rules.resolveFoodEating）
+    // 吃食物：任何球吃到都立刻补一颗（原位替换，判定在 rules.resolveFoodEating）
     eatFood() {
         const result = resolveFoodEating(this.foodList, this.balls, () => this.spawnFood());
         this.foodList = result.foodList;

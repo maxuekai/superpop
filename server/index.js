@@ -7,10 +7,12 @@
 //
 // 事件协议（唯一权威定义，改动需两端同步并更新 AGENTS.md）：
 //   C→S  join{name,viewport{w,h}} / input{x,y} / split / again{name} / viewport{w,h}
-//   S→C  welcome{selfId,time,configHash,world,food,roster,board}
+//        （全部按 socket 令牌桶限频：input 60/s，其余 10/s，超限静默丢包）
+//   S→C  welcome{selfId,time,configHash,world,food,roster,board,roundRemaining}
 //        snapshot{t,cells[],ai[],food{a[],e[]},board?,my{stats,lastSplitAt}}
-//        roster{entries} / eaten{mass,rank,by,stats} / crowned{ownerId,name} / left{id}
-//        rejected{reason}
+//        roster{entries} / eaten{mass,rank,by,stats} / crowned{ownerId,name,mass,countdown} /
+//        newRound{time} / left{id} / rejected{reason}
+//   结算期（ending）世界冻结但快照照常按门控发射——中途加入者靠首帧快照进结算界面。
 // 旧 server 的 registe/create/enter/update（含拼写错误）一并废弃。
 
 import { spawn } from 'node:child_process';
@@ -62,6 +64,13 @@ const server = http.createServer(async (req, res) => {
         let pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
         if (pathname === '/') {
             pathname = '/index.html';
+        }
+        // 百分号编码的路径穿越（/src/%2f..%2fpackage.json、%2e%2e%5c 变体）：
+        // 白名单在解码后、resolve 前做，挡不住编码，解码后含 .. 或 \ 的一律 403
+        if (pathname.includes('..') || pathname.includes('\\')) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
         }
         if (!isAllowed(pathname)) {
             res.writeHead(404);
@@ -208,6 +217,23 @@ function findSocketIdByOwner(ownerId) {
     return null;
 }
 
+// ---------- C→S 限频：每 socket 令牌桶，超限静默丢包（不踢人、不报错） ----------
+// input 60/s（正常客户端按游戏帧节流 ≤30Hz，留一倍余量）；split/again/viewport 各 10/s
+function makeBucket(ratePerSec) {
+    return { rate: ratePerSec, tokens: ratePerSec, lastAt: Date.now() };
+}
+
+function takeToken(bucket) {
+    const now = Date.now();
+    bucket.tokens = Math.min(bucket.rate, bucket.tokens + ((now - bucket.lastAt) / 1000) * bucket.rate);
+    bucket.lastAt = now;
+    if (bucket.tokens < 1) {
+        return false;
+    }
+    bucket.tokens -= 1;
+    return true;
+}
+
 // ---------- 回合生命周期：称王即终局（2026-10-11 产品决策，见 TODO.md M2） ----------
 // 有人称王 → 全场结算 + 倒计时 → 世界与所有玩家重开全新一局。
 // 没有这套流程的话世界无限累积，后来者"一进去就发现别人已经称王"（真机反馈）。
@@ -236,6 +262,12 @@ function startNewRound() {
 
 io.on('connection', (socket) => {
     let session = null;
+    const buckets = {
+        input: makeBucket(60),
+        split: makeBucket(10),
+        again: makeBucket(10),
+        viewport: makeBucket(10),
+    };
 
     socket.on('join', (payload = {}) => {
         if (session) {
@@ -269,7 +301,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('input', (payload = {}) => {
-        if (!session) {
+        if (!session || !takeToken(buckets.input)) {
             return;
         }
         const group = world.groups.get(session.ownerId);
@@ -292,7 +324,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('split', () => {
-        if (!session) {
+        if (!session || !takeToken(buckets.split)) {
             return;
         }
         // 门槛/冷却/上限都在 World.requestSplit 把关（服务端权威，天然防连点）
@@ -300,7 +332,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('again', (payload = {}) => {
-        if (!session) {
+        if (!session || !takeToken(buckets.again)) {
+            return;
+        }
+        // 状态校验：还有存活细胞时不许重生——否则存活玩家能用 again 刷满血+出生保护
+        const existing = world.groups.get(session.ownerId);
+        if (existing && existing.cells.some((cell) => cell.alive)) {
             return;
         }
         const group = world.respawnGroup(session.ownerId, sanitizeName(payload.name));
@@ -313,7 +350,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('viewport', (payload = {}) => {
-        if (!session || !Number.isFinite(payload.w) || !Number.isFinite(payload.h)) {
+        if (!session || !takeToken(buckets.viewport)
+            || !Number.isFinite(payload.w) || !Number.isFinite(payload.h)) {
             return;
         }
         // 下限 300：布局没就绪时客户端可能量到 0，AOI 太小玩家会"看不见被谁吃"
@@ -381,10 +419,10 @@ world.onEvent = (event) => {
 
 // ---------- 主循环：60Hz 固定步长 + 20Hz 快照 ----------
 
-let tickCount = 0;
 let lastTickAt = Date.now();
 let accumulator = 0;
 let lastSnapshotAt = 0;
+let lastBoardAt = 0;
 
 setInterval(() => {
     const now = Date.now();
@@ -395,20 +433,22 @@ setInterval(() => {
         if (now >= roundRestartAt) {
             startNewRound();
         }
-        return;
-    }
-    accumulator += Math.min(now - lastTickAt, 250); // 挂起恢复：同 Game.loop，不补几百步
-    lastTickAt = now;
-    let steps = 0;
-    while (accumulator >= TICK_MS && steps < 5) {
-        world.update(TICK_MS / 1000);
-        // 出生保护标记：快照的 sh 位从这里来（客户端不再自己算）
-        for (const ball of world.balls) {
-            ball.shielded = ball.alive && ball.isProtected(world.time);
+        // 不 return：结算期照常按真实时间门控发快照（世界冻结、内容不变，开销极小）。
+        // 中途加入者 join 后要等第一帧快照才进结算界面——ending 期间一帧都不发的话，
+        // 他会干等最长 8 秒，welcome.roundRemaining 也等过期了
+    } else {
+        accumulator += Math.min(now - lastTickAt, 250); // 挂起恢复：同 Game.loop，不补几百步
+        lastTickAt = now;
+        let steps = 0;
+        while (accumulator >= TICK_MS && steps < 5) {
+            world.update(TICK_MS / 1000);
+            // 出生保护标记：快照的 sh 位从这里来（客户端不再自己算）
+            for (const ball of world.balls) {
+                ball.shielded = ball.alive && ball.isProtected(world.time);
+            }
+            accumulator -= TICK_MS;
+            steps += 1;
         }
-        accumulator -= TICK_MS;
-        tickCount += 1;
-        steps += 1;
     }
     // 快照按真实时间门控（20Hz）：Windows 上 setInterval 实测 ~29ms 才触发一次，
     // 绑"每 3 次触发发一帧"实际只有 ~12 帧/秒、p95 间隔 244ms，插值缓冲直接被打穿
@@ -417,6 +457,12 @@ setInterval(() => {
         return;
     }
     lastSnapshotAt = now;
+
+    // AI 出生/重生/超编移除会改 roster：dirty 时随本快照周期广播一次
+    if (world.rosterDirty) {
+        world.rosterDirty = false;
+        io.emit('roster', { entries: buildRoster() });
+    }
 
     const { map: currentFood, added } = assignFoodIds();
     const eatenIds = [];
@@ -427,7 +473,11 @@ setInterval(() => {
     }
     lastFoodMap = currentFood;
     const foodDelta = { a: added.map(encodeFood), e: eatenIds };
-    const sendBoard = tickCount % 60 === 0; // 1Hz 排行榜（tickCount = 世界步数，恒 60/s）
+    // 排行榜 1Hz：真实时间门控。tickCount % 60 的写法在累加器补步时会整秒跳过
+    const sendBoard = now - lastBoardAt >= 1000;
+    if (sendBoard) {
+        lastBoardAt = now;
+    }
 
     for (const [socketId, session] of sessions) {
         const rect = aoiRect(session);

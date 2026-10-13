@@ -38,6 +38,14 @@ const server = http.createServer(async (req, res) => {
             pathname = '/index.html';
         }
 
+        // 百分号编码的路径穿越（/src/%2f..%2fpackage.json、%2e%2e%5c 变体）：
+        // 白名单在解码后、resolve 前做，挡不住编码，解码后含 .. 或 \ 的一律 403
+        if (pathname.includes('..') || pathname.includes('\\')) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+        }
+
         if (!isAllowed(pathname)) {
             res.writeHead(404);
             res.end('Not Found');
@@ -52,7 +60,11 @@ const server = http.createServer(async (req, res) => {
         }
 
         const data = await readFile(filePath);
-        res.writeHead(200, { 'Content-Type': contentTypes[extname(filePath)] || 'application/octet-stream' });
+        // no-cache：手机浏览器对无缓存头的 js 会启发式缓存，改完代码真机刷到的还是旧包
+        res.writeHead(200, {
+            'Content-Type': contentTypes[extname(filePath)] || 'application/octet-stream',
+            'Cache-Control': 'no-cache',
+        });
         res.end(data);
     } catch (err) {
         res.writeHead(404);
@@ -118,5 +130,13 @@ async function printStartupInfo() {
         }
     }
 }
+
+server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+        console.error(`端口 ${port} 被占用：是否已经在跑 npm run server？（两者同抢一个端口，二选一）`);
+        process.exit(1);
+    }
+    throw err;
+});
 
 server.listen(port, printStartupInfo);

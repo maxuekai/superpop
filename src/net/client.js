@@ -47,8 +47,9 @@ export class NetSession {
     // 调用方把错误显示给玩家。
     async join({ name, viewport }) {
         await loadSocketIo();
-        // 直连 websocket：默认的轮询回退会在弱网/防火墙下反复升降级，表现为卡顿
-        const socket = window.io({ transports: ['websocket'], timeout: SNAP_TIMEOUT_MS });
+        // 直连 websocket：默认的轮询回退会在弱网/防火墙下反复升降级，表现为卡顿。
+        // reconnection 关掉：自动重连是半成品路径（重连后状态不恢复），断线走 UI 弹层
+        const socket = window.io({ transports: ['websocket'], timeout: SNAP_TIMEOUT_MS, reconnection: false });
         this.socket = socket;
         let welcome;
 
@@ -57,6 +58,7 @@ export class NetSession {
                 const timer = setTimeout(() => finish(new Error('连接超时（房主开服了吗？）')), SNAP_TIMEOUT_MS);
                 const finish = (errOrWelcome) => {
                     clearTimeout(timer);
+                    socket.off('connect'); // join 已完成/已失败：重连复活时不能再发一次 join
                     socket.off('welcome');
                     socket.off('rejected');
                     socket.off('connect_error');
@@ -207,10 +209,22 @@ export class NetWorld {
         this.roster = new Map();
         this.myName = '';
         this.renderTime = this.time;
+        // 本地时钟（秒）：估"服务端当前时间"用。提成实例字段是为了单测能注入假时钟
+        this.now = () => performance.now() / 1000;
+        // 服务端时间 − 本地时间 的偏移估计。取近来各快照偏移的**最大值**（min 在途延迟
+        // 滤波：最快的那帧快照最接近真实时钟差），普通快照的对账年龄 = 它比最快帧多花
+        // 的在途时间。若每帧都用当前快照的偏移，age 恒为 0——"按快照年龄外推"就是死代码
+        //（样本时间戳来自 this.time，而 this.time 刚被设为同一帧的 snap.t）
+        this.offsetWindow = []; // 近来 20 帧（≈1s）快照的 服务端时间−本地时间
+        this.serverOffset = 0;
+        this.arrivedAt = 0; // 最近一帧快照到达的本地时刻（本帧对账的时间基准）
         this.samples = new Map(); // key -> [{t,x,y,r}, ≤2]
         this.ghosts = new Map(); // key -> Ball
         this.predictedCells = []; // 自己组的预测细胞（与 groups 里的 ghost 是同一批对象）
         this.roundRemaining = welcome.roundRemaining || 0; // >0：进场时正处结算倒计时
+        // 快照/花名册在 socket 事件里到达（update 之外）：置脏让 Game 空帧也重画，
+        // 否则 120Hz 屏上食物增减/名字变化要多等一拍才上屏
+        this.dirty = true;
         for (const [id, qx, qy, ci] of welcome.food) {
             this.foodList.push(decodeFood(id, qx, qy, ci));
         }
@@ -248,6 +262,7 @@ export class NetWorld {
 
     applyRoster(entries) {
         this.roster = new Map(entries);
+        this.dirty = true; // 名字变了，画布上的球名字要重画
         const mine = this.roster.get(this.myOwnerId);
         if (mine) {
             this.myName = mine;
@@ -262,6 +277,16 @@ export class NetWorld {
 
     applySnapshot(snap) {
         this.time = snap.t / 1000;
+        this.dirty = true; // 食物增减/实体进出 AOI 立刻生效，不等下一个逻辑步
+        // 时钟同步：记录到达时刻并刷新偏移估计（窗口取最大值 = min 在途延迟滤波）。
+        // 对账在同一调用内同步发生，统一用 arrivedAt 作基准——再取一次时钟的 µs 差
+        // 会让"恰好吸附到服务端位置"漂出浮点误差
+        this.arrivedAt = this.now();
+        this.offsetWindow.push(this.time - this.arrivedAt);
+        if (this.offsetWindow.length > 20) {
+            this.offsetWindow.shift();
+        }
+        this.serverOffset = Math.max(...this.offsetWindow);
 
         // 食物增量
         const eaten = snap.food.e;
@@ -401,7 +426,9 @@ export class NetWorld {
     }
 
     // 某实体最新的插值参考点：把最新采样按快照年龄外推到"现在"，
-    // 消掉与服务端权威位置之间的在途延迟（速度取最近两帧采样的差商）
+    // 消掉与服务端权威位置之间的在途延迟（速度取最近两帧采样的差商）。
+    // 快照年龄 = 估计的服务端当前时间 − 最新采样时刻（不能拿 this.time 减：
+    // 采样时间戳就是它写入的，减出来恒为 0，外推从未生效过）
     referenceSample(key) {
         const samples = this.samples.get(key);
         if (!samples || samples.length === 0) {
@@ -416,7 +443,8 @@ export class NetWorld {
         if (dt <= 0) {
             return last;
         }
-        const age = Math.min(this.time - last.t, 0.25); // 外推不超过 250ms
+        const serverNow = this.arrivedAt + this.serverOffset;
+        const age = Math.min(Math.max(serverNow - last.t, 0), 0.25); // 外推不超过 250ms
         return {
             x: last.x + ((last.x - prev.x) / dt) * age,
             y: last.y + ((last.y - prev.y) / dt) * age,
