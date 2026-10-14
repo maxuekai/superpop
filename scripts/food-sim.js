@@ -173,13 +173,23 @@ const cx = WORLD.width / 2;
 const cy = WORLD.height / 2;
 let playerTotal = 0;
 let aiTotal = 0;
+let playerMassTotal = 0;
+let aiMassTotal = 0;
 for (let i = 0; i < TRIALS; i += 1) {
     const seed = BASE_SEED + i * 7919;
     const p = runTrial(`  [第 ${i + 1} 局] 玩家`, () => new Forager(cx, cy, PLAYER.radius, '#fff', 'p'), PLAYER.growthPerFood, seed);
     const a = runTrial(`  [第 ${i + 1} 局] AI`, () => new AiPlayer(cx, cy, PLAYER.radius, '#fff', 'ai'), AI.foodGain ?? PLAYER.growthPerFood, seed);
     playerTotal += p.eaten;
     aiTotal += a.eaten;
+    playerMassTotal += p.mass;
+    aiMassTotal += a.mass;
 }
 const avg = (v) => v / TRIALS;
 console.log(`\n  平均：玩家 ${avg(playerTotal).toFixed(1)} 颗/局，AI ${avg(aiTotal).toFixed(1)} 颗/局`);
 console.log(`  AI / 玩家 食物获取比：${(aiTotal / playerTotal).toFixed(3)}（>1 表示 AI 吃得比玩家快）`);
+// 体重是「食物颗数」看不见的那一面：`foodGain` 改的是每颗的肉，颗数可能一模一样、
+// 肉量却差三成——难度档之间真正该单调的是这个数。以前 difficulty-report 只数颗数，
+// 于是三档体重 0.26/0.3/0.34 的真实梯度在报告里完全看不见（度量盲区，不是没调参）。
+console.log(`  玩家 30s 平均体重：${avg(playerMassTotal).toFixed(0)} kg`);
+console.log(`  AI 30s 平均体重：${avg(aiMassTotal).toFixed(0)} kg`);
+console.log(`  AI / 玩家 体重比：${(aiMassTotal / playerMassTotal).toFixed(3)}`);

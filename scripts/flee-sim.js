@@ -8,6 +8,11 @@
 //                                      escapeFoodWeight / escapeFoodRange
 //   npm run sim -- --sweep             扫猎手半径 10~50，看「大球到底能不能追上」（见下方闭环速度对照）
 //   npm run sim -- --hunter 30 --prey 15   指定猎手半径与猎物半径
+//   npm run sim -- --hunterLead 0.25   猎手瞄「猎物位置 + 速度 × 0.25s」而不是当前位置。
+//                                      与 AI 追击玩家用的是同一套机制（ai.js 里
+//                                      `target.x + target.speedX * AI.chaseLead`），
+//                                      所以这个口径才量得到「AI 主动压宝的那部分」。
+//                                      不给这个 flag 时只出直线口径（历史基线，数字不变）
 import { AI, JOYSTICK, PLAYER, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { parseArgs } from './args.js';
 import { AiPlayer } from '../src/core/ai.js';
@@ -26,7 +31,8 @@ const THREAT_RANGE = 180; // 猎手进入该距离算「受威胁」
 
 // 固定随机种子：AI 的 think() 内部会用到 Math.random，不固定的话同一组参数
 // 每次跑出来的存活时间差异极大，没法拿来对比调参
-let rngSeed = 20261007;
+const BASE_RNG_SEED = 20261007;
+let rngSeed = BASE_RNG_SEED;
 Math.random = () => {
     rngSeed = (rngSeed * 1103515245 + 12345) % 2147483648;
     return rngSeed / 2147483648;
@@ -39,7 +45,7 @@ const cli = parseArgs(process.argv.slice(2), {
     positional: ['fleeRange', 'escapeProbe', 'escapeWallWeight', 'escapeFoodWeight', 'escapeFoodRange'],
     flags: [
         'divisor', 'slowdown', 'hunter', 'prey', 'sweep', 'nofood', 'trials',
-        'worldW', 'worldH',
+        'worldW', 'worldH', 'hunterLead',
         'speedScale', 'foragePower', 'thinkInterval', 'escapeSamples', 'escapeChange', 'chaseRange',
         'fleeRange', 'escapeProbe', 'escapeWallWeight', 'escapeFoodWeight', 'escapeFoodRange',
     ],
@@ -72,6 +78,8 @@ if (flagValue('trials') !== undefined) TRIALS = flagValue('trials');
 const DEFAULT_HUNTER_R = 22;
 const HUNTER_R = flagValue('hunter') ?? DEFAULT_HUNTER_R;
 const PREY_R = flagValue('prey') ?? PLAYER.radius;
+// 猎手预判秒数：0 = 瞄猎物当前位置（历史基线）；>0 = 瞄「位置 + 速度 × N 秒」
+const HUNTER_LEAD = flagValue('hunterLead') ?? 0;
 const SWEEP = process.argv.includes('--sweep');
 // --nofood：猎物不吃食物（不长大）。用来把「速度不对称」和「猎物越逃越大越慢」两种因素分开
 const PREY_GROWS = !process.argv.includes('--nofood');
@@ -83,7 +91,10 @@ function speedOf(r, throttle) {
 }
 
 // 每个 AI 单独一场：猎手从中心出发，被追的 AI 从环形分布的起点出发
-function runOnce(seedIndex, hunterR) {
+// hunterLead：猎手瞄「猎物当前位置」还是「猎物位置 + 输入向量 × lead」。
+// 与 ai.js 追击分支 `target.x + target.speedX * AI.chaseLead` 逐字对称，
+// 这样"预判口径"量到的才是 AI 压宝时真正用的那套机制。
+function runOnce(seedIndex, hunterR, hunterLead = 0) {
     const hunter = new Ball(WORLD.width / 2, WORLD.height / 2, hunterR, '#fff', 'hunter');
     const angle = (seedIndex / TRIALS) * Math.PI * 2;
     const startX = WORLD.width / 2 + Math.cos(angle) * 220;
@@ -106,9 +117,9 @@ function runOnce(seedIndex, hunterR) {
     let foodEaten = 0;
 
     for (let step = 0; step < RUN_SECONDS / STEP; step += 1) {
-        // 猎手满舵直线追击（比 AI 快，模拟玩家贴脸追）
-        const dx = victim.x - hunter.x;
-        const dy = victim.y - hunter.y;
+        // 猎手满舵追击（比 AI 快，模拟玩家贴脸追）；hunterLead>0 时瞄猎物前方
+        const dx = (victim.x + victim.speedX * hunterLead) - hunter.x;
+        const dy = (victim.y + victim.speedY * hunterLead) - hunter.y;
         const len = distance(dx, dy, 0, 0) || 1;
         hunter.speedX = (dx / len) * JOYSTICK.radius;
         hunter.speedY = (dy / len) * JOYSTICK.radius;
@@ -192,30 +203,57 @@ if (SWEEP) {
     console.log('注：「理论直退」假设猎物沿连线远离；若实测比理论更乐观，说明猎物在转向/拐弯时');
     console.log('    把速度花在了侧向（径向分离变差），猎手反而能拉近距离——这正是 AI 贴墙时会被抓的原因。');
 } else {
-    const results = [];
-    for (let i = 0; i < TRIALS; i += 1) {
-        results.push(runOnce(i, HUNTER_R));
+    // 两个口径：lead=0 的直线猎手是**历史基线**（verify / docs/tuning.md 的数字都出自这里，
+    // 行文本保持逐字不变），--hunterLead > 0 时再跑一段预判猎手。
+    // 为什么需要第二个口径：AI 追击玩家时瞄的是「猎物位置 + 速度 × chaseLead」，
+    // 而直线猎手永远瞄当前位置——于是 chaseLead/chaseRange 这两个真正决定
+    // "AI 追你追得凶不凶"的参数在仿真里完全是死参数，难度梯度也就测不出来。
+    const calibers = [{ label: '直线', lead: 0 }];
+    if (HUNTER_LEAD > 0) {
+        calibers.push({ label: '预判', lead: HUNTER_LEAD });
     }
-    const times = results.map((r) => r.survived).sort((a, b) => a - b);
-    const avg = times.reduce((sum, v) => sum + v, 0) / times.length;
-    const cornered = results.reduce((sum, r) => sum + r.corneredFrames, 0);
-    const threatened = results.reduce((sum, r) => sum + r.threatenedFrames, 0);
-    const eaten = results.reduce((sum, r) => sum + r.foodEaten, 0);
 
-    console.log(`猎手半径 ${HUNTER_R} 满舵直线追击，猎物 r=${PREY_R}，各 ${TRIALS} 轮，每轮最多 ${RUN_SECONDS}s`);
-    console.log(`  存活时间：最短 ${times[0].toFixed(1)}s / 平均 ${avg.toFixed(1)}s / 最长 ${times[times.length - 1].toFixed(1)}s`);
-    console.log(`  被吃：${results.filter((r) => r.survived < RUN_SECONDS).length}/${TRIALS} 轮`);
-    console.log(`  受威胁总帧 ${threatened}，其中被逼到墙角 ${cornered} 帧（${(cornered / threatened * 100).toFixed(1)}%）`);
-    console.log(`  顺手吃到的食物：${eaten} 颗（平均 ${(eaten / TRIALS).toFixed(1)} 颗/轮，escapeFoodRange=${AI.escapeFoodRange}）`);
-    console.log(`  当前参数：fleeRange=${AI.fleeRange} borderMargin=${AI.borderMargin} escapeSamples=${AI.escapeSamples} escapeProbe=${AI.escapeProbe}`);
+    for (const { label, lead } of calibers) {
+        // 每个口径都从同一个随机状态出发。否则第二个口径接着第一个的随机流跑，
+        // 两组数字的差异里混进了"随机流不同"这一项，就没法归因到猎手瞄准方式。
+        rngSeed = BASE_RNG_SEED;
+        const results = [];
+        for (let i = 0; i < TRIALS; i += 1) {
+            results.push(runOnce(i, HUNTER_R, lead));
+        }
+        const times = results.map((r) => r.survived).sort((a, b) => a - b);
+        const avg = times.reduce((sum, v) => sum + v, 0) / times.length;
+        const cornered = results.reduce((sum, r) => sum + r.corneredFrames, 0);
+        const threatened = results.reduce((sum, r) => sum + r.threatenedFrames, 0);
+        const eatenFood = results.reduce((sum, r) => sum + r.foodEaten, 0);
+        const caught = results.filter((r) => r.survived < RUN_SECONDS).length;
+        const cornerPct = threatened ? (cornered / threatened * 100) : 0;
+        // 预判口径的行加「预判·」前缀：difficulty-report 用行首锚定的正则分别取两段，
+        // 不加前缀的话两段数字会被同一个正则混着读（这项目里表格静默变 "?" 过一次）。
+        const p = label === '直线' ? '' : `${label}·`;
 
-    const hunterSpeed = speedOf(HUNTER_R, 1);
-    const preySpeed = speedOf(PREY_R, AI.speedScale);
-    console.log(`  闭环速度：猎手 ${hunterSpeed.toFixed(1)} / 猎物 ${preySpeed.toFixed(1)} → 理论${hunterSpeed > preySpeed ? '追得上' : '追不上'}`);
-    if (cornered / threatened > 0.15) {
-        console.log('  ⚠ 被逼墙比例偏高：可以考虑调大 escapeWallWeight / escapeProbe');
-    }
-    if (eaten === 0) {
-        console.log('  ⚠ 逃跑时一颗食物都没吃到：检查 escapeFoodRange / escapeFoodWeight');
+        if (label === '直线') {
+            console.log(`猎手半径 ${HUNTER_R} 满舵直线追击，猎物 r=${PREY_R}，各 ${TRIALS} 轮，每轮最多 ${RUN_SECONDS}s`);
+        } else {
+            console.log(`\n【${label}猎手口径】猎手瞄「猎物位置 + 速度 × ${lead}s」，与 AI 追击玩家同一套机制`);
+            console.log(`猎手半径 ${HUNTER_R}，猎物 r=${PREY_R}，各 ${TRIALS} 轮，每轮最多 ${RUN_SECONDS}s`);
+        }
+        console.log(`  ${p}存活时间：最短 ${times[0].toFixed(1)}s / 平均 ${avg.toFixed(1)}s / 最长 ${times[times.length - 1].toFixed(1)}s`);
+        console.log(`  ${p}被吃：${caught}/${TRIALS} 轮`);
+        console.log(`  ${p}受威胁总帧 ${threatened}，其中被逼到墙角 ${cornered} 帧（${cornerPct.toFixed(1)}%）`);
+        console.log(`  ${p}顺手吃到的食物：${eatenFood} 颗（平均 ${(eatenFood / TRIALS).toFixed(1)} 颗/轮，escapeFoodRange=${AI.escapeFoodRange}）`);
+
+        if (label === '直线') {
+            console.log(`  当前参数：fleeRange=${AI.fleeRange} borderMargin=${AI.borderMargin} escapeSamples=${AI.escapeSamples} escapeProbe=${AI.escapeProbe}`);
+            const hunterSpeed = speedOf(HUNTER_R, 1);
+            const preySpeed = speedOf(PREY_R, AI.speedScale);
+            console.log(`  闭环速度：猎手 ${hunterSpeed.toFixed(1)} / 猎物 ${preySpeed.toFixed(1)} → 理论${hunterSpeed > preySpeed ? '追得上' : '追不上'}`);
+            if (cornered / threatened > 0.15) {
+                console.log('  ⚠ 被逼墙比例偏高：可以考虑调大 escapeWallWeight / escapeProbe');
+            }
+            if (eatenFood === 0) {
+                console.log('  ⚠ 逃跑时一颗食物都没吃到：检查 escapeFoodRange / escapeFoodWeight');
+            }
+        }
     }
 }
