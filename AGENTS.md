@@ -84,6 +84,17 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   `snapshot{t,cells[],ai[],food{a,e},board?,my}` / `roster{entries}` / `eaten{mass,rank,by,stats}` /
   `crowned{ownerId,name,mass,countdown}` / `newRound{time}` / `left{id}` / `rejected{reason}`。
   旧协议的 `registe`/`create`/`enter`/`update`（含拼写错误）已废弃，别再引用。
+- **快照的元组形状只在 `core/protocol.js` 定义一次**（服务端 `encodeBall`、客户端 `decodeBall`、
+  单测三方共用，`rules-test.js` 里有一条用真实编码器造快照喂 NetWorld 的测试盯着它）。
+  `cells[]`/`ai[]` = `[ownerId, cid, x, y, r, shielded, colorIdx]`，坐标 ×2 量化：
+  - **cid 是细胞的稳定身份，构造时分配、永不改变**（`Ball.cellSeq`）。客户端拿它当 ghost 的 key，
+    **绝对不要退回 `ownerId#index`**——index 是组内数组位置，被吃一颗中间分身或两个分身合并
+    就会重排，key 被复用给别的球，对端看到 ghost 瞬移一帧（回归测试：
+    「分身被吃导致索引重排时 ghost 不被复用」）。分裂时原球保留 cid、新半球拿新 cid；
+    合并时被并掉的消失；重生是新 cid。
+  - **改协议形状必须三步一起做**：改 `protocol.js` → `PROTOCOL_VERSION + 1` → 同步
+    `server/index.js` 头注释与本节。版本号算进了 `configHash`，所以漏掉第二步的后果是
+    浏览器里的旧客户端连上新宿主、静默解出错位的值——configHash 覆盖不到形状，只覆盖数值块。
 - **回合制（称王即终局，2026-10-11 产品决策）**：有人称王 → 服务端广播 `crowned`（带
   countdown=8s）→ 世界冻结、所有人看全场结算（重生按钮/输入框藏起来，**不用点任何东西**）→
   倒计时到点服务端 `startNewRound()`（所有人 respawnGroup 回出生体重 + 稀疏选点 + 保护，
