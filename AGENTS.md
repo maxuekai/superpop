@@ -22,6 +22,7 @@ superpop —— "球球大作战"网页版（Agar.io-like 网页游戏）。吃�
 | `npm run invariants` | 只跑 config 层硬约束断言（面密度、半径上限、称王门槛可达性…） | 无 |
 | `npm run sim` | AI 逃跑仿真：满舵猎手追击 20 轮，输出存活时间/被吃轮次/被逼墙比例 | 无 |
 | `npm run sim:food` | 食物密度与成长仿真：密度、命中概率、速度剖面、玩家 vs AI 成长对比 | 无 |
+| `npm run sim:net` | **联机仿真**：真 socket.io + TCP 代理注入延迟（默认 80/150ms 单向），三客户端跑真实对局，自动判定预测误差/互吃两端一致/带宽与快照频率 | 需 `npm install`（socket.io-client，仅仿真用） |
 | `npm run server` | **联机服务器**：同端口托管静态文件 + ws + 局域网 URL/二维码打印；60Hz 跑 World、20Hz 发快照。与 `npm run dev` 同抢 3000 端口，**二选一跑** | 需先 `npm install`（socket.io） |
 
 **非交互 shell（Agent 跑命令）的坑**：shell 不加载 profile 时 `node/npm` 不在 PATH，且
@@ -65,6 +66,7 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 │                         #   check.js（语法 + 结构性检查）/ rules-test.js（108 条规则单测）
 │                         #   invariants.js（config 硬约束断言，11 条）
 │                         #   flee-sim.js（追击仿真）/ food-sim.js（觅食仿真）
+│                         #   net-sim.mjs（联机仿真：真 socket.io + 注入延迟，需 socket.io-client）
 │                         #   respawn-check / endgame-check / zoom-report / difficulty-report（体检脚本）
 ├── .agents/skills/       # 项目级 skill：tuning-config-value / device-feedback-triage /
 │                         #   no-silent-failure / superpop-browser-test（浏览器实测套路）
@@ -238,6 +240,19 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   半径上限装得进世界、称王门槛在上限之内且球不超过视口宽的一半、分裂间距大于合并阈值、
   难度档位不许动速度…… 违反了当场炸，而不是几周后靠"手感不对"才发现。
 - `Game` 本身依赖 canvas 无法直接测，它的行为靠两个仿真脚本回归。
+- **联机没有单测兜底，靠 `npm run sim:net`**：真 socket.io + TCP 代理注入单向延迟
+  （80/150ms 两档），三客户端跑真实对局，自动判定预测误差 < 视口宽 2%、输入突变后 500ms 收敛、
+  互吃在「被吃方 / 旁观端 / 吃球方」三处一致、每端带宽 < 10KB/s、快照 ≥15Hz，不合格 exit 1。
+  **改协议、预测/对账、插值、AOI 之后必须跑它**——这条路径此前只在 LAN 直连（≈0ms）手测过一次，
+  0 毫秒下所有网络问题都不存在。
+  写这类仿真时踩过的坑（都在脚本注释里，别退回去）：
+  ① 摆位/改状态后**轮询等客户端确认**再取值，固定等待读到的是陈旧值，断言会随机挂；
+  ② 断言自己那端的球时，位置要取 `referenceSample`（服务端权威值），**不能取 `cell.x`**——
+     那是本地预测值，每帧都在动，"到位没"永远等不到；
+  ③ 半径只能用相对容差（球在持续吃食物长大）；
+  ④ 让整场确定化靠**给所有端挂护盾**：`resolveEatings` 只在受害者侧查 `isProtected`，
+     所以挂护盾的球死不了、却照样吃得掉人；不这么做就会随机有人被 AI 吃掉、摆位变 no-op；
+  ⑤ 收尾的 exit code 要从 judge 的结果数组派生，另写一份条件会出现"打了 ✗ 却说全部通过"。
 - 调仿真参数一律用 **flag**，别用位置参数：`scripts/args.js` 会在 flag 的值和位置参数
   撞值时直接报错（旧的解析器会静默串位，把 `escapeFoodWeight` 赋成 90，整组数据作废）。
 - 调手感参数前先读 [docs/tuning.md](docs/tuning.md)：里面有公式、当前值、实测数据与验收口径
