@@ -180,6 +180,16 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   3/5/7/7/5/6/4/8 秒。「再来一局」在玩家看来必须是新的一局。体检：`node scripts/respawn-check.mjs`。
 - **AI 决策**：逃离更大的球 > 追击更小的球 > 觅食 > 游走；逃跑方向从多个候选方向打分挑最优
   （离威胁远 + 不贴墙 + 不撞球 + 顺手吃路边食物），不是沿直线跑（那会被逼到墙角撞死）。
+- **难度档位只调决策质量，且必须先修度量再调参**：三档 speedScale 相同（动了它 AI 就抓不到），
+  差别全在 `DIFFICULTY.*` 覆写值。两个曾经让"调参无效"的度量盲区已经堵上，**别再退回去**：
+  ① 成长速度只看「吃了几颗食物」会漏掉 `foodGain`——它改的是**每颗的肉**，颗数一样肉量差三成，
+  必须看 `food-sim` 的「AI 30s 平均体重」；② 仿真猎手如果永远瞄当前位置，`chaseLead` 就是
+  **死参数**，`flee-sim --hunterLead N` 才是那个口径。改任一档后跑
+  `node scripts/difficulty-report.mjs`，它自动判定验收线（两种口径被吃率 easy>normal>hard 单调、
+  体重三档单调且档差 ≥15%、normal 守住锚点），不合格 exit 1。
+  **两个已实测的反直觉点**：`escapeSamples` 在 16 以上饱和、`escapeChange` 压低反而更好抓
+  （不可预测性对两种猎手都只帮猎物）——它们不是难度杠杆。`DIFFICULTY.normal` 必须与
+  `AI.*` 默认值逐项相同（脚本会比对）。数字与依据见 docs/tuning.md「难度档位」。
 - **出生点避开所有存活球**并远离世界边缘；出生保护期内吃不掉（玩家 2.5s / AI 1.5s，画光环），
   保护时间从真正 `begin()` / `respawnPlayer()` 那一刻起算。
 - **食物成簇生成**：开局 `seedFood` 按 `clusterSize` 颗/簇铺满，**同簇共享颜色**（成片可扫；
