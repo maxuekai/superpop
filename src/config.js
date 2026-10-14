@@ -154,18 +154,26 @@ export const DEATH = {
 // 为什么不动速度：`AI.speedScale` 从 0.92 提到 1.05，被吃率会从 20/20 崩到 4/20
 // （AI 快到根本抓不到，"吃人"这个玩法就没了）。速度一档动，两个目标就对立了。
 // 难度改成调：反应快慢、逃跑方向算得准不准（候选方向数/探测距离）、
-// 会不会主动围猎（追击距离与提前量）、会不会乱改主意（escapeChange）。
+// 什么时候开始逃（fleeRange）、会不会乱改主意（escapeChange）。
 //
-// ⚠ 这些参数互相牵扯，不能凭直觉配，要用 `npm run sim` / `npm run sim:food`
-// 实测每档的「被吃率」和「AI 成长速度」再定。已知的反直觉例子：
-// fleeRange 调高反而让 AI 更好抓（14/20 → 17/20 → 19/20）——
-// 早开跑的 AI 会一路跑到墙角，escapeSamples 给到 24 也救不回来。
+// ⚠ 这些参数互相牵扯且**不可加**：单参数扫描的结论组合起来会变（实测 hard 单扫时
+// thinkInterval 0.06 单独看让 AI 多被吃 6/40，合进 hard-2 反而是全场最好的一档）。
+// 改任何一档都必须跑 `node scripts/difficulty-report.mjs`，它会自动判定
+// 「两种猎手口径下被吃率 easy > normal > hard 单调」+「AI 30s 体重三档单调且档差 ≥15%」。
+// 已知的反直觉例子：
+//  ① fleeRange **不是越大越聪明**：它非单调，130 附近是最优（晚逃 = 一次逃对，
+//     早逃 = 一路狂奔撞墙角）。见下方三档实测。
+//  ② escapeSamples 在 16 以上饱和（24/32 与 16 无差别），**不是**难度杠杆。
+//  ③ escapeChange（乱改主意的概率）实测**不能当难度杠杆**：它对两种猎手都没有
+//     单调效应，压低它（0.12）反而让 AI 在预判猎手下更好抓。hard 因此沿用 normal 的值。
+//  ④ thinkInterval 调快（0.06）单看会让 AI 更多被吃——决策更快 = 行为更可预测。
 export const DIFFICULTY = {
     easy: {
         label: '简单',
         // 见 AI 的同名字段；这里是"覆写值"，没写的沿用 AI 的默认值
-        fleeRange: 130,
-        thinkInterval: 0.25,
+        // 实测（flee-sim 120 轮）：被吃 116/120（97%），normal 是 91/120（76%）
+        fleeRange: 190,
+        thinkInterval: 0.15,
         escapeSamples: 8,
         escapeProbe: 150,
         chaseRange: 300,
@@ -177,6 +185,10 @@ export const DIFFICULTY = {
     },
     normal: {
         label: '普通',
+        // ⚠ 这一档必须与 AI.* 的默认值**逐项相同**（fleeRange 160 / thinkInterval 0.1 /
+        //    escapeSamples 16 / escapeProbe 180 / escapeChange 0.25）。
+        //    它是默认档和历史验收锚点，difficulty-report 会拿"不带 flag 的 flee-sim"
+        //    当参照逐位比对，漂了就报出来。
         fleeRange: 160,
         thinkInterval: 0.1,
         escapeSamples: 16,
@@ -190,13 +202,18 @@ export const DIFFICULTY = {
     },
     hard: {
         label: '困难',
-        fleeRange: 175,
+        // fleeRange 130 < normal 的 160：不是"反应更慢"，而是**晚逃**——
+        // 等威胁真的逼近再决定，一次逃对方向；早逃的 AI 会一路狂奔到墙角（被逼墙 4%→11%）。
+        // 配合 escapeProbe 270（看得远）让它早看到墙角、提前绕开。
+        // 实测（120 轮）：被吃 63/120（53%），预判猎手口径 94/120（78%），normal 是 105/120（88%）
+        fleeRange: 130,
         thinkInterval: 0.06,
         escapeSamples: 24,
-        escapeProbe: 230,
+        escapeProbe: 270,
         chaseRange: 820,
         chaseLead: 0.45,
-        escapeChange: 0.12,
+        // 与 normal 相同：不可预测性对两种猎手都只帮猎物，压低它没有难度收益（见文件头 ③）
+        escapeChange: 0.25,
         foodGain: 0.34,
         minCount: 7,
         count: 14,
