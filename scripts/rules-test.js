@@ -2,11 +2,12 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, EAT, FOOD, JOYSTICK, KEYS, KING, NAMES, PLAYER, SPAWN, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
+import { AI, COLORS, EAT, FOOD, JOYSTICK, KEYS, KING, NAMES, PLAYER, SPAWN, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { Camera } from '../src/core/camera.js';
 import { Player } from '../src/core/player.js';
+import { cellKey, decodeBall, encodeBall } from '../src/core/protocol.js';
 import {
     canSplit,
     dueRespawns,
@@ -1598,12 +1599,12 @@ test('World：重生/进场稀疏选点——在唯一的安全区里落子（�
 test('NetWorld：myRank——全场按整组质量排自己的名次（AI 也算）', () => {
     // 自己 p0 一颗 r=20（400kg）；甲组 r=30（900）压过自己；AI r=10（100）压不过
     const w = new NetWorld(netWelcome(), netSnap(10000, [
-        ['p1', 100, 200, 60, 0, 0],   // 甲组 900kg
-    ], [['ball1', 500, 500, 20, 0, 2]])); // AI 100kg
+        ['p1', 1, 100, 200, 60, 0, 0],   // 甲组 900kg
+    ], [['ball1', 1, 500, 500, 20, 0, 2]])); // AI 100kg
     // 把自己变成 p0 组（welcome 的 selfId 是 p0，但不发自己的细胞——手工补一组）
     w.applySnapshot(netSnap(10500, [
-        ['p1', 100, 200, 60, 0, 0],
-        ['p0', 300, 300, 40, 0, 0],   // 自己 400kg
+        ['p1', 1, 100, 200, 60, 0, 0],
+        ['p0', 1, 300, 300, 40, 0, 0],   // 自己 400kg
     ]));
     assert.equal(w.myRank(), 2, '只被甲组压过 → 第 2 名');
     // 自己吃胖到 1000kg：全场第一
@@ -1630,8 +1631,40 @@ test('World：requestSplit 按组输入方向分裂，质量守恒（多组各�
     assert.equal(world.balls.filter((b) => b.ownerId === 'A').length, 2, '碰撞列表同步重建');
 });
 
-// ---------- 联机客户端 NetWorld（快照 → 可渲染世界） ----------
+test('细胞 cid 生命周期——分裂保留原球 cid、合并只留一个、重生是新细胞', () => {
+    // cid 是联机客户端认出「同一个分身」的唯一依据（core/protocol.js）。
+    // 语义错了不会立刻崩：ghost 只是被复用/瞬移一帧，要在这里钉住。
+    const world = new World();
+    const group = world.addGroup('A', '甲组');
+    const originCid = group.cells[0].cid;
 
+    // 分裂：原球保持对象引用（只是半径减半并偏移）→ cid 不变；新半球是新对象 → 新 cid
+    group.cells[0].r = 40;
+    group.input.speedX = 100;
+    assert.equal(world.requestSplit('A'), true);
+    const [first, second] = group.cells;
+    assert.equal(first.cid, originCid, '分裂后原球保留 cid');
+    assert.notEqual(second.cid, originCid, '新半球必须是新 cid');
+    const splitCids = new Set(group.cells.map((c) => c.cid));
+    assert.equal(splitCids.size, 2, '同一时刻组内 cid 不能重复');
+
+    // 合并：靠拢后并回一颗，活下来的那颗保留 cid，被并掉的消失
+    second.x = first.x;
+    second.y = first.y;
+    first.mergeAfter = -Infinity;
+    second.mergeAfter = -Infinity;
+    const merged = mergeCells(group.cells, world.time).cells;
+    assert.equal(merged.length, 1, '两半并回一颗');
+    assert.ok(merged[0].cid === first.cid || merged[0].cid === second.cid,
+        '合并结果必须是其中一颗的 cid（不能凭空产生第三个身份）');
+
+    // 重生：全新的细胞 → 新 cid（对端应当看到"一颗新球"，而不是旧球复活）
+    const beforeRespawn = group.cells[0].cid;
+    world.respawnGroup('A');
+    assert.notEqual(group.cells[0].cid, beforeRespawn, '重生是新的细胞身份');
+});
+
+// ---------- 联机客户端 NetWorld（快照 → 可渲染世界） ----------
 // 造一份 welcome + 首帧快照（selfId 用 p0：它不在场上，p1/p2 都是远程球）
 function netWelcome() {
     return {
@@ -1656,10 +1689,10 @@ function netSnap(t, cells, ai, food, my) {
 
 test('NetWorld：welcome+首帧快照重建世界（多细胞组 / AI / 食物全量 / 花名册）', () => {
     const w = new NetWorld(netWelcome(), netSnap(10000, [
-        ['p1', 100, 200, 20, 1, 0],
-        ['p1', 140, 200, 20, 0, 0],   // 同组分身：分裂后的第二颗
-        ['p2', 800, 800, 30, 0, 1],
-    ], [['ball1', 500, 500, 40, 0, 2]]));
+        ['p1', 1, 100, 200, 20, 1, 0],
+        ['p1', 2, 140, 200, 20, 0, 0],   // 同组分身：分裂后的第二颗（cid 是新的一半）
+        ['p2', 1, 800, 800, 30, 0, 1],
+    ], [['ball1', 1, 500, 500, 40, 0, 2]]));
     assert.equal(w.myOwnerId, 'p0');
     assert.equal(w.foodList.length, 3, 'welcome 的食物全量要进世界');
     assert.equal(w.board.length, 1);
@@ -1676,8 +1709,8 @@ test('NetWorld：welcome+首帧快照重建世界（多细胞组 / AI / 食物�
 });
 
 test('NetWorld：食物增量——被吃的消失、补种的新增（id 稳定）', () => {
-    const w = new NetWorld(netWelcome(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
-    w.applySnapshot(netSnap(10500, [['p1', 105, 200, 21, 0, 0]], [], { a: [[9, 111, 222, 3]], e: [2] }));
+    const w = new NetWorld(netWelcome(), netSnap(10000, [['p1', 1, 100, 200, 20, 0, 0]]));
+    w.applySnapshot(netSnap(10500, [['p1', 1, 105, 200, 21, 0, 0]], [], { a: [[9, 111, 222, 3]], e: [2] }));
     assert.equal(w.foodList.length, 3, '吃一颗补一颗，总量恒定');
     assert.equal(w.foodList.some((f) => f.id === 2), false, '被吃的 id 消失');
     assert.equal(w.foodList.some((f) => f.id === 9), true, '补种的 id 新增');
@@ -1685,10 +1718,10 @@ test('NetWorld：食物增量——被吃的消失、补种的新增（id 稳定
 });
 
 test('NetWorld：tick 插值——ghost 位置朝最新快照推进（渲染时钟独立于快照到达）', () => {
-    const w = new NetWorld(netWelcome(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    const w = new NetWorld(netWelcome(), netSnap(10000, [['p1', 1, 100, 200, 20, 0, 0]]));
     // 一秒后的第二帧快照：细胞从 x=50 移到 x=170（快照坐标是 ×2 量化值，340=170 世界单位）
-    w.applySnapshot(netSnap(11000, [['p1', 340, 200, 20, 0, 0]]));
-    const ghost = w.ghosts.get('p1#0');
+    w.applySnapshot(netSnap(11000, [['p1', 1, 340, 200, 20, 0, 0]]));
+    const ghost = w.ghosts.get('p1#1');
     assert.equal(ghost.x, 50, '插值前停在首帧位置');
     // 渲染时钟落后 100ms：tick 一帧就快进到「最新快照 - 100ms」，位置大幅推进
     w.tick(1 / 60);
@@ -1702,20 +1735,72 @@ test('NetWorld：tick 插值——ghost 位置朝最新快照推进（渲染时�
 
 test('NetWorld：消失的实体被清理（被吃 / 离开 AOI 不留鬼影）', () => {
     const w = new NetWorld(netWelcome(), netSnap(10000, [
-        ['p1', 100, 200, 20, 0, 0],
-        ['p2', 800, 800, 30, 0, 1],
-    ], [['ball1', 500, 500, 40, 0, 2]]));
+        ['p1', 1, 100, 200, 20, 0, 0],
+        ['p2', 1, 800, 800, 30, 0, 1],
+    ], [['ball1', 1, 500, 500, 40, 0, 2]]));
     assert.equal(w.groups.size, 2);
     assert.equal(w.ai.length, 1);
     // 下一帧：p2 整组消失、AI 消失（被吃或出视野）
-    w.applySnapshot(netSnap(10500, [['p1', 105, 200, 21, 0, 0]]));
+    w.applySnapshot(netSnap(10500, [['p1', 1, 105, 200, 21, 0, 0]]));
     assert.equal(w.groups.size, 1);
     assert.equal(w.groups.has('p2'), false);
     assert.equal(w.ai.length, 0);
-    assert.equal(w.ghosts.has('p2#0'), false, '鬼影要清掉');
-    assert.equal(w.ghosts.has('ai:ball1'), false);
+    assert.equal(w.ghosts.has('p2#1'), false, '鬼影要清掉');
+    assert.equal(w.ghosts.has('ai:1'), false);
     // p1 的组还在
     assert.equal(w.groups.get('p1').cells.length, 1);
+});
+
+test('NetWorld：分身被吃导致索引重排时 ghost 不被复用（cid 而非 index）', () => {
+    // 这条是「远程分身瞬移」的回归测试。用 index 当 key 时，中间那颗被吃之后
+    // 后面所有分身索引前移一格 → key 被复用给别的球 → ghost 从旧位置跳到新位置。
+    const w = new NetWorld(netWelcome(), netSnap(10000, [
+        ['p1', 1, 100, 100, 20, 0, 0],   // cid1 → 世界 (50, 50)
+        ['p1', 2, 300, 100, 20, 0, 0],   // cid2 → (150, 100)
+        ['p1', 3, 900, 100, 20, 0, 0],   // cid3 → (450, 100)
+    ]));
+    const ghost3 = w.ghosts.get('p1#3');
+    assert.ok(ghost3, '三颗分身都要各自有 ghost');
+
+    // 中间那颗（cid2）被吃：组内 3 颗 → 2 颗，后面的 cid 位置前移
+    w.applySnapshot(netSnap(10500, [
+        ['p1', 1, 110, 100, 21, 0, 0],
+        ['p1', 3, 910, 100, 21, 0, 0],
+    ]));
+    assert.equal(w.groups.get('p1').cells.length, 2);
+    assert.equal(w.ghosts.has('p1#2'), false, '被吃那颗的 ghost 要清掉');
+    assert.equal(w.ghosts.get('p1#3'), ghost3,
+        'cid3 必须是**同一个 ghost 对象**——用 index 的话这里会变成 undefined（index 只有 0/1）'
+        + '或复用成别人的 ghost');
+
+    // 插值一帧：cid3 的 ghost 朝自己的新位置（455, 100）走，而不是朝 cid2 的旧位置（150, 100）
+    w.tick(1 / 60);
+    assert.ok(ghost3.x > 450, `cid3 该朝自己的新位置走，实际 x=${ghost3.x}`);
+});
+
+test('协议：服务端编码器与客户端解码器共用一份定义（形状漂移当场红）', () => {
+    // 用**真实的 encodeBall**（server/index.js 发快照时调的就是它）造一行喂给 NetWorld。
+    // 服务端与客户端各写一份编解码时，两边悄悄改歪不会报错，只会解出 undefined 或错位——
+    // 这条测试把两端钉在同一个 core/protocol.js 上。
+    const ball = new Ball(100, 200, 12, COLORS[1], '甲', 'p1');
+    ball.shielded = true;
+    const row = encodeBall(ball);
+
+    const d = decodeBall(row);
+    assert.equal(d.ownerId, 'p1');
+    assert.equal(d.cid, ball.cid, 'cid 必须原样传过去');
+    assert.equal(d.x, 100, '坐标除回 2（量化精度 0.5 世界单位）');
+    assert.equal(d.y, 200);
+    assert.equal(d.r, 12);
+    assert.equal(d.shielded, true);
+    assert.equal(d.colorIndex, COLORS.indexOf(COLORS[1]));
+
+    const w = new NetWorld(netWelcome(), netSnap(10000, [row]));
+    const cell = w.groups.get('p1').cells[0];
+    assert.equal(cell.cid, ball.cid, 'ghost 要挂在服务端给的 cid 上');
+    assert.equal(cell.x, 100);
+    assert.equal(cell.shielded, true);
+    assert.equal(w.ghosts.has(cellKey('p1', ball.cid)), true, 'key 形状与客户端内部一致');
 });
 
 // 自己在场上（selfId p1）的 welcome，预测测试用
@@ -1726,7 +1811,7 @@ function netWelcomeSelf() {
 }
 
 test('NetWorld：本地预测——自己的细胞按本地输入即时推进，不等快照（修"不丝滑"）', () => {
-    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 1, 100, 200, 20, 0, 0]]));
     const cell = w.myGroup().cells[0];
     const x0 = cell.x;
     // 满舵右移 0.5 秒：Ball.update 与服务端同一套代码，速度 = 70 / divisor × speedUnit
@@ -1735,49 +1820,49 @@ test('NetWorld：本地预测——自己的细胞按本地输入即时推进，
     }
     assert.ok(cell.x > x0 + 30, `本地输入要立即驱动预测球，实际 ${x0} → ${cell.x}`);
     // 没有任何快照到达，位置纯本地模拟
-    assert.equal(w.samples.get('p1#0').length, 1, '期间没有新快照');
+    assert.equal(w.samples.get('p1#1').length, 1, '期间没有新快照');
 });
 
 test('NetWorld：对账——小误差按比例拉回，大误差直接吸附（快照回到场上的服务端位置）', () => {
     // 服务端球在世界 x=200（快照量化值 400）
-    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 400, 200, 20, 0, 0]]));
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 1, 400, 200, 20, 0, 0]]));
     const cell = w.myGroup().cells[0];
     assert.equal(cell.x, 200);
     // 预测漂到 (230, 200)，服务端仍说 (200, 200)：误差 30 ≤ 吸附阈值 → 只拉回 15%
     cell.x = 230;
-    w.applySnapshot(netSnap(10500, [['p1', 400, 200, 20, 0, 0]]));
+    w.applySnapshot(netSnap(10500, [['p1', 1, 400, 200, 20, 0, 0]]));
     assert.ok(cell.x > 200 && cell.x < 230, `小误差该部分拉回，实际 ${cell.x}`);
     // 预测漂到 (600, 200)（比如被大球挤开，预测模型没这信息）：误差远超阈值 → 吸附
     cell.x = 600;
-    w.applySnapshot(netSnap(11000, [['p1', 400, 200, 20, 0, 0]]));
+    w.applySnapshot(netSnap(11000, [['p1', 1, 400, 200, 20, 0, 0]]));
     assert.equal(cell.x, 200, '大误差必须吸附到服务端位置');
 });
 
 test('NetWorld：对账参考点按快照年龄外推（快照在途几十 ms，age 不能恒为 0）', () => {
     // 假时钟注入：偏移估计取窗口最大值（min 在途延迟滤波），所以"快照年龄"=
     // 本帧比最快帧多花的在途时间。构造期用的是真实时钟，清掉窗口重新同步。
-    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 400, 200, 20, 0, 0]]));
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 1, 400, 200, 20, 0, 0]]));
     let fakeNow = 100;
     w.now = () => fakeNow;
     w.offsetWindow = [];
     // 基准帧：服务端 10.0s，本地 100.0 到达（在途最快的一帧）
-    w.applySnapshot(netSnap(10000, [['p1', 400, 200, 20, 0, 0]]));
+    w.applySnapshot(netSnap(10000, [['p1', 1, 400, 200, 20, 0, 0]]));
     // 下一帧：服务端 0.5s 走了 10 单位（速度 20/s），路上多花 80ms（本地 100.58 才到）
     fakeNow = 100.58;
-    w.applySnapshot(netSnap(10500, [['p1', 420, 200, 20, 0, 0]]));
-    const s = w.referenceSample('p1#0');
+    w.applySnapshot(netSnap(10500, [['p1', 1, 420, 200, 20, 0, 0]]));
+    const s = w.referenceSample('p1#1');
     assert.ok(Math.abs(s.x - 211.6) < 1e-9,
         `参考点该外推到"现在"（210 + 20/s × 0.08s = 211.6），实际 ${s.x}`);
     // 外推上限 250ms：晚到 1s+ 也只外推 0.25s（服务端继续 20/s 移动到 220）
     fakeNow = 102.08;
-    w.applySnapshot(netSnap(11000, [['p1', 440, 200, 20, 0, 0]]));
-    const clamped = w.referenceSample('p1#0');
+    w.applySnapshot(netSnap(11000, [['p1', 1, 440, 200, 20, 0, 0]]));
+    const clamped = w.referenceSample('p1#1');
     assert.ok(Math.abs(clamped.x - 225) < 1e-9,
         `外推该钳在 250ms（220 + 20/s × 0.25s = 225），实际 ${clamped.x}`);
 });
 
 test('NetWorld：结构变化吸附——分裂后细胞数变了，整组按服务端布局重置', () => {
-    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 100, 200, 20, 0, 0]]));
+    const w = new NetWorld(netWelcomeSelf(), netSnap(10000, [['p1', 1, 100, 200, 20, 0, 0]]));
     w.myGroup().cells[0].x = 500; // 预测状态乱掉也无所谓
     // 假时钟钉住：referenceSample 会按「快照年龄」外推（age = 到达时刻+offset − 样本时刻），
     // 真实时钟下两次调用之间流出几微秒，期望的精确值 45 就会漂成 44.9999…。
@@ -1786,8 +1871,8 @@ test('NetWorld：结构变化吸附——分裂后细胞数变了，整组按服
     w.offsetWindow = [];
     // 服务端分裂完成：两颗分身
     w.applySnapshot(netSnap(10500, [
-        ['p1', 90, 200, 14, 0, 0],
-        ['p1', 110, 200, 14, 0, 0],
+        ['p1', 1, 90, 200, 14, 0, 0],
+        ['p1', 2, 110, 200, 14, 0, 0],
     ]));
     const cells = w.myGroup().cells;
     assert.equal(cells.length, 2);

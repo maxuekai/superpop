@@ -14,6 +14,13 @@
 //        newRound{time} / left{id} / rejected{reason}
 //   结算期（ending）世界冻结但快照照常按门控发射——中途加入者靠首帧快照进结算界面。
 // 旧 server 的 registe/create/enter/update（含拼写错误）一并废弃。
+//
+// cells[] / ai[] 的元组形状（v2）：[ownerId, cid, x, y, r, shielded, colorIdx]，坐标 ×2。
+//   cid = 细胞的稳定身份，构造时分配、永不改变。客户端用它当 ghost 的 key，
+//   **不要再退回 `ownerId#index`**：index 是组内数组位置，被吃一颗中间分身或两个分身
+//   合并就会重排，对端会看到 ghost 瞬移一帧。编码/解码与 PROTOCOL_VERSION 在
+//   src/core/protocol.js（两端共用同一份）——形状一改就 +1，否则浏览器里的旧客户端
+//   会静默解出错位的值，而 configHash 覆盖不到协议形状。
 
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -23,9 +30,10 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 
-import { AI, COLORS, FOOD, JOYSTICK, KING, PLAYER, VIEW, WORLD } from '../src/config.js';
+import { AI, FOOD, JOYSTICK, KING, PLAYER, VIEW, WORLD } from '../src/config.js';
 import { groupMass } from '../src/core/rules.js';
 import { configHash } from '../src/core/config-hash.js';
+import { colorIndex, encodeBall, quantize } from '../src/core/protocol.js';
 import { World } from '../src/core/world.js';
 
 const TICK_MS = 1000 / 60;
@@ -119,21 +127,9 @@ function assignFoodIds() {
 }
 let lastFoodMap = assignFoodIds().map;
 
-// 量化：世界 1280 → ×2 后仍在 uint16 范围，精度 0.5 世界单位（球半径 ≥12，够用）
-const q = (v) => Math.round(v * 2);
-const colorIndex = (hex) => Math.max(0, COLORS.indexOf(hex));
-
-const encodeFood = (food) => [food.id, q(food.x), q(food.y), colorIndex(food.color)];
-// 细胞/球编码：[ownerId, x, y, r, shielded, colorIdx]。
-// 颜色跟着球走（AI 重生、玩家重生都会换色），名字才走 roster。
-const encodeBall = (ball) => [
-    ball.ownerId,
-    q(ball.x),
-    q(ball.y),
-    q(ball.r),
-    ball.shielded ? 1 : 0,
-    colorIndex(ball.bColor),
-];
+// 量化与细胞编码统一在 core/protocol.js（服务端、客户端、单测共用同一份定义），
+// 协议形状要改时只改那一个文件，见那里的 PROTOCOL_VERSION 三步走。
+const encodeFood = (food) => [food.id, quantize(food.x), quantize(food.y), colorIndex(food.color)];
 
 function largestCellOf(ownerId) {
     const group = world.groups.get(ownerId);

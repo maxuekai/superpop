@@ -31,11 +31,24 @@ let lastNameFont = '';
 // 质量约定为 r²，和体重面板显示口径一致。
 export class Ball {
     static ownerSeq = 0;
+    // 细胞身份（cid）：构造时分配、此后永不改变，用来在联机快照里认出「同一个细胞」。
+    //
+    // 为什么需要它：客户端曾经用 `ownerId#index` 当 ghost 的 key，index 是细胞在组内
+    // 数组的位置。被吃一颗中间分身、或两个分身合并，位置就会重排——index 1 突然
+    // 指向了原来 index 2 的那颗球，对端于是看到 ghost 瞬移一帧。cid 不受重排影响。
+    //
+    // 语义：
+    //   · 分裂：原球**保持**自己的 cid（对象没换，只是半径减半并偏移），新半球拿新 cid；
+    //   · 合并：活下来的那颗保持 cid，被并进去的直接消失；
+    //   · 死亡/重生：都是新对象、新 cid（重生本来就该是"一颗新球"）。
+    // 所以 cid 全局单调递增即可，不需要回收；进程内唯一就够。
+    static cellSeq = 0;
 
     constructor(x, y, r, bColor, name, ownerId) {
         this.x = x;
         this.y = y;
         this.r = r;
+        this.cid = Ball.nextCellId();
         this.speedX = 0;
         this.speedY = 0;
         this.bColor = bColor;
@@ -68,6 +81,11 @@ export class Ball {
     static nextOwnerId() {
         Ball.ownerSeq += 1;
         return Ball.ownerSeq;
+    }
+
+    static nextCellId() {
+        Ball.cellSeq += 1;
+        return Ball.cellSeq;
     }
 
     // 质量 = 半径平方

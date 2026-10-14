@@ -10,6 +10,7 @@
 import { COLORS, FOOD, WORLD } from '../config.js';
 import { Ball } from '../core/ball.js';
 import { configHash } from '../core/config-hash.js';
+import { aiKey, cellKey, decodeBall } from '../core/protocol.js';
 import { groupMass } from '../core/rules.js';
 
 const INTERP_DELAY = 0.1; // 远程球渲染滞后于服务端 100ms（5 帧 @20Hz），足够吃掉局域网抖动
@@ -299,32 +300,39 @@ export class NetWorld {
             this.foodList.push(decodeFood(id, qx, qy, ci));
         }
 
-        // 采样：key = ownerId#index（组内顺序稳定：原球在前、分身按切出顺序追加）
+        // 采样：key = cellKey(ownerId, cid)，cid 是细胞的稳定身份（core/protocol.js）。
+        // ⚠ 不要退回 `ownerId#index`：index 是组内数组位置，被吃一颗中间分身、或两个分身
+        // 合并，都会让后面的细胞索引前移一格 —— key 复用到了别的球上，对端就看到 ghost
+        // 瞬移一帧。cid 与数组位置无关：分裂时原球保留 cid、新半球拿新 cid。
         const seen = new Set();
         const cellsByOwner = new Map();
-        for (const [ownerId, qx, qy, qr, sh, ci] of snap.cells) {
-            const list = cellsByOwner.get(ownerId) || [];
-            list.push([qx, qy, qr, sh, ci]);
-            cellsByOwner.set(ownerId, list);
+        for (const row of snap.cells) {
+            const c = decodeBall(row);
+            const list = cellsByOwner.get(c.ownerId) || [];
+            list.push(c);
+            cellsByOwner.set(c.ownerId, list);
         }
-        const takeSample = (key, qx, qy, qr) => {
+        const takeSample = (key, x, y, r) => {
             seen.add(key);
             let list = this.samples.get(key);
             if (!list) {
                 list = [];
                 this.samples.set(key, list);
             }
-            list.push({ t: this.time, x: qx / 2, y: qy / 2, r: qr / 2 });
+            list.push({ t: this.time, x, y, r });
             if (list.length > 2) {
                 list.shift();
             }
         };
 
         for (const [ownerId, list] of cellsByOwner) {
-            list.forEach(([qx, qy, qr], index) => takeSample(`${ownerId}#${index}`, qx, qy, qr));
+            for (const c of list) {
+                takeSample(cellKey(ownerId, c.cid), c.x, c.y, c.r);
+            }
         }
-        for (const [ownerId, qx, qy, qr] of snap.ai) {
-            takeSample(`ai:${ownerId}`, qx, qy, qr);
+        for (const row of snap.ai) {
+            const c = decodeBall(row);
+            takeSample(aiKey(c.cid), c.x, c.y, c.r);
         }
 
         // 消失的实体（被吃 / 离开 AOI / 断线）：样本与 ghost 一起清掉
@@ -339,9 +347,12 @@ export class NetWorld {
         this.groups = new Map();
         this.ai = [];
         for (const [ownerId, list] of cellsByOwner) {
-            const cells = list.map(([qx, qy, qr, sh, ci], index) => {
-                const ghost = this.ghostFor(`${ownerId}#${index}`, ownerId, COLORS[ci]);
-                ghost.shielded = sh === 1;
+            const cells = list.map((c) => {
+                const ghost = this.ghostFor(cellKey(ownerId, c.cid), ownerId, COLORS[c.colorIndex]);
+                // ghost 是本地 new Ball 出来的，本来带一个**本地** cid；换成服务端的，
+                // 这样"幽灵身上写的是谁的细胞"和 key 永远一致，将来谁都不会拿混。
+                ghost.cid = c.cid;
+                ghost.shielded = c.shielded;
                 return ghost;
             });
             const group = {
@@ -356,8 +367,10 @@ export class NetWorld {
                 this.myName = group.name;
             }
         }
-        for (const [ownerId, qx, qy, qr, , ci] of snap.ai) {
-            const ghost = this.ghostFor(`ai:${ownerId}`, ownerId, COLORS[ci]);
+        for (const row of snap.ai) {
+            const c = decodeBall(row);
+            const ghost = this.ghostFor(aiKey(c.cid), c.ownerId, COLORS[c.colorIndex]);
+            ghost.cid = c.cid;
             this.ai.push(ghost);
         }
         this.balls = [...this.ai];
@@ -389,9 +402,12 @@ export class NetWorld {
             return;
         }
         const prev = this.predictedCells;
+        // 参考点按**细胞的 cid** 取，不按索引：索引只在数量不变时才对得上，
+        // 而 split/merge 恰恰会改数组形状（结构变化分支本身就是按数量分派的）。
+        const myKey = (cell) => cellKey(this.myOwnerId, cell.cid);
         if (prev.length !== mine.cells.length) {
             for (let i = 0; i < mine.cells.length; i += 1) {
-                const s = this.referenceSample(`${this.myOwnerId}#${i}`);
+                const s = this.referenceSample(myKey(mine.cells[i]));
                 if (s) {
                     mine.cells[i].x = s.x;
                     mine.cells[i].y = s.y;
@@ -401,7 +417,7 @@ export class NetWorld {
             }
         } else {
             for (let i = 0; i < mine.cells.length; i += 1) {
-                const s = this.referenceSample(`${this.myOwnerId}#${i}`);
+                const s = this.referenceSample(myKey(mine.cells[i]));
                 const cell = mine.cells[i];
                 if (!s) {
                     continue;
