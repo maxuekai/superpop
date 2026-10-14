@@ -11,6 +11,7 @@
     "verify": "node scripts/check.js && node scripts/rules-test.js && node scripts/invariants.js && node scripts/flee-sim.js && node scripts/food-sim.js --trials 8",
     "sim": "node scripts/flee-sim.js",
     "sim:food": "node scripts/food-sim.js",
+    "sim:net": "node scripts/net-sim.mjs",
     "invariants": "node scripts/invariants.js"
   },
   "keywords": [
@@ -23,6 +24,7 @@
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "socket.io-client": "^4.8.4"
   }
 }

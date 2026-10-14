@@ -382,6 +382,38 @@ io.on('connection', (socket) => {
                 log(`[debug] ${group.name} 触发称王判定`);
             }
         });
+
+        // 测试钩子：把自己摆到指定位置/体型（可选去掉出生保护）。
+        // net-sim 需要**确定性**地造一次互吃：靠 AI 漫游撞出一次互吃是概率事件，
+        // 跑十次不一定碰上一次，那样的断言等于没有断言。摆位比"等"可靠得多。
+        socket.on('debug:place', (payload = {}) => {
+            if (!session) {
+                return;
+            }
+            const group = world.groups.get(session.ownerId);
+            const cell = group && group.cells.find((c) => c.alive);
+            if (!cell) {
+                return;
+            }
+            if (Number.isFinite(payload.x) && Number.isFinite(payload.y)) {
+                const r = Number.isFinite(payload.r) ? payload.r : cell.r;
+                // 钳在世界内：摆到界外会被 Ball.update 的边界钳制拉回来，钩子就白设了
+                cell.x = Math.min(WORLD.width - r, Math.max(r, payload.x));
+                cell.y = Math.min(WORLD.height - r, Math.max(r, payload.y));
+            }
+            if (Number.isFinite(payload.r)) {
+                cell.r = Math.min(WORLD.maxBallRadius, Math.max(PLAYER.radius, payload.r));
+            }
+            // shield：给一段出生保护，用来把"摆位等待快照传下来"这几秒里挡住 AI；
+            // unshield 则立刻去掉。没有它，被吃方可能在摆位窗口就被 AI 顺手吃掉，
+            // 断言的凶手就不是预期里那个"两头接触"的结果了。
+            if (Number.isFinite(payload.shield) && payload.shield > 0) {
+                cell.grantShield(payload.shield, world.time);
+            }
+            if (payload.unshield === true) {
+                cell.shieldUntil = 0; // 出生保护会挡住互吃，摆位做互吃实验时要去掉
+            }
+        });
     }
 });
 
