@@ -22,13 +22,14 @@
 //   src/core/protocol.js（两端共用同一份）——形状一改就 +1，否则浏览器里的旧客户端
 //   会静默解出错位的值，而 configHash 覆盖不到协议形状。
 
-import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
+
+import { prepareQr } from './qr-startup.js';
 
 import { AI, FOOD, JOYSTICK, KING, PLAYER, VIEW, WORLD } from '../src/config.js';
 import { groupMass } from '../src/core/rules.js';
@@ -48,6 +49,7 @@ const NICKNAME_MAX = 12;
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = process.env.PORT || 3000;
 const qrPath = join(root, 'qr.png');
+const lastUrlPath = join(root, '.qr-last-url');
 
 const contentTypes = {
     '.html': 'text/html; charset=utf-8',
@@ -546,23 +548,6 @@ function lanAddresses() {
     return list;
 }
 
-function openFile(path) {
-    const commands = {
-        win32: ['cmd', ['/c', 'start', '""', path]],
-        darwin: ['open', [path]],
-        linux: ['xdg-open', [path]],
-    };
-    const command = commands[process.platform];
-    if (!command) {
-        return;
-    }
-    try {
-        spawn(command[0], command[1], { detached: true, stdio: 'ignore' }).unref();
-    } catch {
-        // 打开失败不影响服务器
-    }
-}
-
 async function printStartupInfo() {
     console.log(`superpop 联机服务器: http://localhost:${port}`);
     console.log('注意：与 npm run dev 同抢 3000 端口，二选一跑；新机器首次开服需在 Windows 防火墙放行 node。');
@@ -573,17 +558,7 @@ async function printStartupInfo() {
     }
     const url = `http://${ips[0]}:${port}`;
     console.log(`手机（同一 Wi-Fi）请访问：${url}`);
-    try {
-        const { default: QRCode } = await import('qrcode');
-        await QRCode.toFile(qrPath, url);
-        console.log(`二维码图片已生成：${qrPath}`);
-        // 每次启动都自动打开二维码图片。终端字符画的版本已删：ANSI 颜色码在
-        // 不渲染转义序列的视图里是一堆 [47m 乱码，扫不了还吓人（真机反馈）。
-        openFile(qrPath);
-        console.log('（已自动打开二维码图片，用手机扫屏幕上的码）');
-    } catch (err) {
-        console.log(`（二维码生成失败：${err && err.message}；URL 不受影响）`);
-    }
+    await prepareQr(url, qrPath, lastUrlPath);
 }
 
 server.listen(port, printStartupInfo);

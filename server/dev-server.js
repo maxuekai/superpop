@@ -2,14 +2,16 @@
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { prepareQr } from './qr-startup.js';
 
 // resolve 去掉目录 URL 自带的结尾分隔符，保证下面的 root + sep 前缀判断正确
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = process.env.PORT || 3000;
 const qrPath = join(root, 'qr.png');
+const lastUrlPath = join(root, '.qr-last-url');
 
 const contentTypes = {
     '.html': 'text/html; charset=utf-8',
@@ -85,24 +87,6 @@ function lanAddresses() {
     return list;
 }
 
-// 用系统默认程序打开文件（二维码图片），失败静默忽略
-function openFile(path) {
-    const commands = {
-        win32: ['cmd', ['/c', 'start', '""', path]],
-        darwin: ['open', [path]],
-        linux: ['xdg-open', [path]],
-    };
-    const command = commands[process.platform];
-    if (!command) {
-        return;
-    }
-    try {
-        spawn(command[0], command[1], { detached: true, stdio: 'ignore' }).unref();
-    } catch {
-        // 打开失败不影响服务器
-    }
-}
-
 async function printStartupInfo() {
     console.log(`superpop dev server: http://localhost:${port}`);
     const ips = lanAddresses();
@@ -111,24 +95,7 @@ async function printStartupInfo() {
     }
     const url = `http://${ips[0]}:${port}`;
     console.log(`手机（同一 Wi-Fi）请访问：${url}`);
-
-    // qrcode 是可选 devDependency：没装就只打印 URL，不影响启动
-    try {
-        const { default: QRCode } = await import('qrcode');
-        await QRCode.toFile(qrPath, url);
-        console.log(`二维码图片已生成：${qrPath}`);
-
-        // 每次启动都自动打开二维码图片。终端字符画的版本已删：ANSI 颜色码在
-        // 不渲染转义序列的视图里是一堆 [47m 乱码，扫不了还吓人（真机反馈）。
-        openFile(qrPath);
-        console.log('（已自动打开二维码图片，用手机扫屏幕上的码）');
-    } catch (err) {
-        if (err && err.code === 'MODULE_NOT_FOUND') {
-            console.log('（可选 devDependency qrcode 未安装：npm install 后自动生成二维码图片）');
-        } else {
-            console.log(`（二维码生成失败：${err && err.message}）`);
-        }
-    }
+    await prepareQr(url, qrPath, lastUrlPath);
 }
 
 server.on('error', (err) => {
