@@ -150,6 +150,14 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   玩家组（ownerId → cells/input/stats）是 World 的一等公民：单机只有一个组，联机每人一组。
 - **固定步长**：`Game.loop` 用累加器按 `TICK.fps`(60) 推进，每帧上限 `maxSteps` 步，超出丢积压；渲染跟随刷新率。
   `Ball.update(dt)` 的位移与弹簧都乘 `dt * speedUnit`，否则 120Hz 手机上球速会是 60Hz 的两倍。
+- **不要提议把渲染层换成成熟框架（PixiJS / Phaser / Three）**——2026-10-17 已评估并否决，
+  依据见 [docs/tuning.md](docs/tuning.md#渲染层维持-canvas-2d2026-10-17-评估结论不换)：
+  ① 单帧只有几十~几百次 canvas 调用（地图 1 次 blit + 食物 6 次合批 + ≤76 个球），远未到瓶颈；
+  ② **零构建步骤是承重结构**，CDN 会打死"手机同 Wi-Fi 扫码即玩"这条主部署路径；
+  ③ 通用引擎自带主循环/物理，会破坏"服务端 import 的就是单机那份 `core/World`"这个前提，
+     而联机模式整个建立在它上面。**怀疑渲染慢时先用 `?debug=1` 的 `frameMs` 量真机数字**，
+     别靠猜。真要提升视觉上限（metaball/辉光）走**球层裸 WebGL**，别引框架，
+     也别用 `shadowBlur` 凑合（软件模糊，真机直接掉帧）。
 - **状态机**：`menu` → `playing` → `dying`（被吃演出）→ `dead`（结算）/ `playing` → `crowned`（称王）。
   只有 `playing` 与 `dying` 跑 `world.update`（`dying` 按 `DEATH.slowMoScale` 慢放，`world.time` 跟世界走，
   演出计时 `dyingTimer` 用真实秒），播完 `finishDeath()` 才弹结算；弹层期间世界冻结。
