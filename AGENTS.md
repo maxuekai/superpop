@@ -40,7 +40,7 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 ```
 ├── index.html            # canvas + 体重面板 + 排行榜 + 摇杆 + 开局/结算弹层 + 分裂按钮
 ├── src/
-│   ├── main.js           # 入口：装配 Game / Joystick / Keyboard / Hud，滚轮缩放
+│   ├── main.js           # 入口：装配 Game / Joystick / Keyboard / MouseSteer / Hud，滚轮缩放
 │   ├── config.js         # 全部可调常量（每个都写了调它的理由）
 │   ├── core/             # 玩法逻辑，纯逻辑、不碰 DOM（例外：log-panel 挂 DOM）
 │   │   ├── world.js      # 无头世界：食物/AI/玩家组/互吃/分裂/重生/称王，事件走回调
@@ -57,13 +57,14 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 │   │   ├── rectangle.js  # 矩形工具（within/overlaps）
 │   │   └── utils.js      # 数学、随机、clamp、smoothTowards、zoomTarget、颜色
 │   ├── input/            # joystick.js（浮动摇杆 + 双指捏合缩放）/ keyboard.js（WASD + 动作键 + 缩放键）
+│                         #   / mouse.js（桌面鼠标朝光标方向走）
 │   ├── ui/hud.js         # DOM 层：体重面板、排行榜、弹层、分裂按钮、单机/联机选择
 │   ├── styles/           # reset.css + index.css
 │   └── net/client.js     # 联机客户端：NetSession（连接/输入/动作）+ NetWorld（快照→插值渲染）
 ├── server/               # dev-server.js（开发预览）/ index.js（联机服务器：静态+ws 同端口、60Hz World、20Hz 快照）
 ├── scripts/              # 仿真与检查全套：
 │                         #   args.js（仿真共用 flag 解析 + 撞值护栏）
-│                         #   check.js（语法 + 结构性检查）/ rules-test.js（108 条规则单测）
+│                         #   check.js（语法 + 结构性检查）/ rules-test.js（127 条规则单测）
 │                         #   invariants.js（config 硬约束断言，11 条）
 │                         #   flee-sim.js（追击仿真）/ food-sim.js（觅食仿真）
 │                         #   net-sim.mjs（联机仿真：真 socket.io + 注入延迟，需 socket.io-client）
@@ -81,11 +82,14 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 - **玩法逻辑只放在 `core/` 的纯逻辑类里**（不碰 `document`），这样 `rules-test.js` 才能在 node 里直接测；
   `ui/hud.js` 只做 DOM 读写。事件监听目标由构造传入（`new Keyboard(document, ...)`），不要在类里直接摸 `document`。
 - **联机协议（唯一权威定义在 `server/index.js` 头注释，改动需两端同步并更新这里）**：
-  C→S `join{name,viewport}` / `input{x,y}` / `split` / `again{name}` / `viewport{w,h}`；
-  S→C `welcome{selfId,time,configHash,world,food,roster,board,roundRemaining}` /
+  C→S `join{name,viewport,token?}` / `input{x,y}` / `split` / `again{name}` / `viewport{w,h}`；
+  S→C `welcome{selfId,time,configHash,world,food,roster,board,roundRemaining,resumeToken,resumed,death}` /
   `snapshot{t,cells[],ai[],food{a,e},board?,my}` / `roster{entries}` / `eaten{mass,rank,by,stats}` /
   `crowned{ownerId,name,mass,countdown}` / `newRound{time}` / `left{id}` / `rejected{reason}`。
   旧协议的 `registe`/`create`/`enter`/`update`（含拼写错误）已废弃，别再引用。
+  客户端侧还多两个**本地**事件（不经协议）：`netdown`（断线、正在退避重连）与
+  `resumed{death}`（重连成功），由 `NetSession` 合成后交给 `Game.onNetEvent`——
+  新增 S→C 事件时这两条要一起看，别只改一边。
 - **快照的元组形状只在 `core/protocol.js` 定义一次**（服务端 `encodeBall`、客户端 `decodeBall`、
   单测三方共用，`rules-test.js` 里有一条用真实编码器造快照喂 NetWorld 的测试盯着它）。
   `cells[]`/`ai[]` = `[ownerId, cid, x, y, r, shielded, colorIdx]`，坐标 ×2 量化：
@@ -119,6 +123,19 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   结算期（ending）世界冻结但**快照照常发射**——中途加入者的 `firstSnapshot()` 靠它进结算界面，
   别把 ending 分支改回"return 不发"。C→S 全消息面有令牌桶限频（input 60/s、其余 10/s），
   超限静默丢包；`again` 服务端校验无存活细胞才放行（否则活着能刷重生+护盾）。
+- **断线重连（M4，协议 v3）**：断线**不立刻移除**——细胞留在场上（输入清零，站着不动，
+  会被 AI 吃掉），`NET.graceSeconds`(10s) 内带 `join.token = 上次的 welcome.resumeToken`
+  重连即**认领原细胞**：ownerId 与 cid 都不变（cid 变了就是"换了个新人"，客户端 ghost 全重画）。
+  超期才 `removeGroup` + 广播 `left`，**断线期间不发 `left`**（人还在场上）。
+  三条容易踩的：
+  ① 认领判断必须在「房间已满」**之前**——宽限期内的组本来就占着 `MAX_PLAYERS` 名额，
+     反过来判会把自家重连挡在门外；
+  ② 宽限期内被 AI 吃光的话，服务端要记住死亡瞬间的 mass/rank（`eaten` 事件那时没有 socket 可发），
+     重连时随 `welcome.death` 带回，否则客户端只看到"没有球"和一个算不出名次的 0kg 结算；
+  ③ 客户端断线后**冻结**（`NetWorld.tick(dt, input, frozen)` + 不上行输入）：服务端输入已清零，
+     本地还按旧输入推的话球会自己漂一小段、重连后又被吸附回去，像抽搐。
+     退避重连失败耗尽才回菜单（`NET.reconnectTries` × 退避 > 宽限期），失败中途不能放弃——
+     中途放弃就会出现"客户端还在重试、服务端已删人"的空档。
 - 保持行为等价：改之前先看 TODO.md 对应条目，别顺手改出与记录不符的行为。
 - commit 消息：`feat:` / `fix:` / `docs:` / `refactor:` + 中文标题；**正文写根因与实测数字**
   （"为什么改、凭什么说改对了"），代码与文档分开提交。
@@ -160,8 +177,14 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   缩进钳在自动值 × `userZoomMax`。`userZoom` 是视角偏好，重开一局不清。
 - **改 WORLD 前必须扫追击难度**：`npm run sim -- --worldW X --worldH Y`。地图越大 AI 越抓不到
   （2048×1536 时被吃率从 20/20 掉到 2/20，游戏会退化成纯刷食物）。想延长单局请调 `KING.mass`。
-- **输入层是 `game.input`**，摇杆与键盘都写它，再同步进玩家组（`group.input`）、由 `world.update`
+- **输入层是 `game.input`**，摇杆、键盘、鼠标都写它，再同步进玩家组（`group.input`）、由 `world.update`
   写给每一个分身——分身不是一个球，直接共享球对象的话输入只会作用在其中一个上。
+- **三种输入互不打架，靠"谁最后动谁生效"**：鼠标只在 `pointermove` 写、键盘只在 `keydown` 写，
+  按住 W 不动鼠标就一直是键盘在管，反之亦然。不要为它们加仲裁状态机。
+  鼠标给的是**方向不是位移**（光标到球的像素距离与力度无关），力度复用 `JOYSTICK.radius`
+  走同一套速度分母；鼠标监听 **canvas** 而不是 document——HUD 面板浮在画布上方，
+  指针停在面板上时画布收不到事件，球自然不动，不需要再判 `.ui-interactive`；
+  合成 touch 指针事件与摇杆让位要各挡一道（见 `MouseSteer.isTouch` / `isBlocked`）。
 - 渲染按 `devicePixelRatio` 缩放后平移到相机视口；食物**不烤进地图**，每帧按视口动态绘制并**按颜色合批**。
 
 **玩法类**
@@ -187,12 +210,24 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   镜头与视野跟随最大的分身，所以分裂时视野不跳。
   **禁用态必须说得出原因**：分身数达 `SPLIT.maxCells` 时按钮显示"已达上限"而不是消失——
   玩家从画面上看不出这个限制。判定在 `rules.splitStatus`（纯函数可单测）。
+- **分裂与合并的手感反馈成对**：`rules.splitCells` 写外冲速度（`applySplitPush`），
+  `rules.mergeCells` 写 `mergeStun`/`mergeWobble`（`SPLIT.mergeStun*`），都由 `Ball.update` 消费。
+  按 `applySplitPush` 的约定，**rules.js 里直接写字段、不调方法**（core 不能假设调用方传的是
+  Ball 子类）。僵直的最后一帧必须把 `mergeWobble` 清零——留个 k 的残值就是"球永远是椭的"。
+  联机侧合并不额外发事件（纯表现不值带宽），客户端由**自己这一组活细胞数变少且没全灭**来推断
+  （`NetWorld.detectMyMerge`）；别人的组不能这么推断——少一颗也可能是离开 AOI。
 - **重生必须连世界一起重置**（`Game.restartWorld`，`begin`/`respawnPlayer` 都调）：AI 的体型会跨玩家的
   死亡保留下来，而 `syncAiCount` 只在"数量超编"时踢人——6 个 AI / 目标 6 个时一个都不踢。
   于是玩家重生回 100kg 时，场上每个球都吃得掉它、它吃不掉任何一个，实测连试 8 次只活
   3/5/7/7/5/6/4/8 秒。「再来一局」在玩家看来必须是新的一局。体检：`node scripts/respawn-check.mjs`。
 - **AI 决策**：逃离更大的球 > 追击更小的球 > 觅食 > 游走；逃跑方向从多个候选方向打分挑最优
-  （离威胁远 + 不贴墙 + 不撞球 + 顺手吃路边食物），不是沿直线跑（那会被逼到墙角撞死）。
+  （离威胁远 + 不贴墙 + 不撞球 + 顺手吃路边食物 + **绕圈偏置**），不是沿直线跑（那会被逼到墙角撞死）。
+- **绕圈拖延（`AI.fleeOrbit*`）必须落在 `fleeRange` 之内**：偏置的闸门是
+  `fleeOrbitNear → fleeRange` 插值，`fleeOrbitNear` 一旦 ≥ `fleeRange`，AI 根本不会逃到那么远，
+  闸门永远打不满、`fleeOrbit` 就成了**死参数**（第一版就是这么写的：240 vs 160，
+  40 轮实测全部落在噪声里，白写）。**做法是打分偏置，不是旋转选出来的方向**：
+  旋转发生在贴墙/撞球惩罚项算完之后，转完可能正对着墙（实测偏转强度 ≥0.65 时被逼墙
+  0.9% → 4~5%）；偏置让打分函数自己去挑，墙的约束一直在，绕不出去就不绕。
 - **难度档位只调决策质量，且必须先修度量再调参**：三档 speedScale 相同（动了它 AI 就抓不到），
   差别全在 `DIFFICULTY.*` 覆写值。两个曾经让"调参无效"的度量盲区已经堵上，**别再退回去**：
   ① 成长速度只看「吃了几颗食物」会漏掉 `foodGain`——它改的是**每颗的肉**，颗数一样肉量差三成，
@@ -220,6 +255,9 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   重新锚定原点避免把抬指瞬间的位移当方向）。`.ui-interactive` 元素上的触摸
   不接管也不 `preventDefault`，否则弹层里的按钮点不动——对第二根手指同样成立
   （按钮上的手指不进捏合）。
+- 桌面鼠标：球朝光标方向走（不用按住），**监听 canvas**、只认 `pointerType==='mouse'`；
+  摇杆操控中与菜单/结算期间让位。`pointerleave` 与 `blur` 都要清零输入——
+  光标不动但窗口切走时，上一帧方向还留在 `input` 里，球会一直朝那边走。
 - 键盘 `WASD`/方向键，斜向归一化；**`+`/`−` 缩放视野**（一次一档，按住靠系统自动重复）；
   摇杆正在操控时键盘方向让位（缩放不让，它是视角偏好不是移动）；输入框/弹层里打字不响应；
   `blur` 与 `visibilitychange` 要清空按键，防止 keyup 丢失后"卡住一直走"。
@@ -228,7 +266,9 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 ## 测试与调参
 
 - `npm run verify`：**改动任何玩法数值后的唯一入口**，按顺序跑五层——
-  ① 语法 + 结构性检查 ② 规则单测（86 条）③ config 不变量断言（11 条）④ 追击仿真 ⑤ 觅食仿真。
+  ① 语法 + 结构性检查 ② 规则单测（127 条；**条数以 `npm test` 输出的 `rules check: N/N` 为准**，
+  别再在文档里手写一个会漂的数字——本文件曾经同时写着 86 和 108，README 写着 115）③ config 不变量断言（11 条）
+  ④ 追击仿真 ⑤ 觅食仿真。
 - `npm test` 只跑前两层，**发现不了手感类回归**。速度、AI 平衡、地图尺寸、视野全都只影响仿真，
   单测对它们一概全绿——这次踩过的最贵的几个坑都是"`npm test` 全绿但玩法已经崩了"。
   **改 `src/config.js` 的数值 → 只跑 `npm test` 等于没测。**
@@ -242,17 +282,29 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
 - `Game` 本身依赖 canvas 无法直接测，它的行为靠两个仿真脚本回归。
 - **联机没有单测兜底，靠 `npm run sim:net`**：真 socket.io + TCP 代理注入单向延迟
   （80/150ms 两档），三客户端跑真实对局，自动判定预测误差 < 视口宽 2%、输入突变后 500ms 收敛、
-  互吃在「被吃方 / 旁观端 / 吃球方」三处一致、每端带宽 < 10KB/s、快照 ≥15Hz，不合格 exit 1。
+  互吃在「被吃方 / 旁观端 / 吃球方」三处一致、每端带宽 < 10KB/s、快照 ≥15Hz，
+  外加断线重连四条（细胞留在宽限期 / 认领回同一 ownerId / cid 不变 / 到期移除并广播 left），
+  不合格 exit 1。
   **改协议、预测/对账、插值、AOI 之后必须跑它**——这条路径此前只在 LAN 直连（≈0ms）手测过一次，
   0 毫秒下所有网络问题都不存在。
   写这类仿真时踩过的坑（都在脚本注释里，别退回去）：
   ① 摆位/改状态后**轮询等客户端确认**再取值，固定等待读到的是陈旧值，断言会随机挂；
   ② 断言自己那端的球时，位置要取 `referenceSample`（服务端权威值），**不能取 `cell.x`**——
      那是本地预测值，每帧都在动，"到位没"永远等不到；
-  ③ 半径只能用相对容差（球在持续吃食物长大）；
+  ③ 半径只能用相对容差（球在持续吃食物长大），**而且只卡下界**：摆完位的球是静止的，
+     r=15 吃几秒就长到 19，半径单调增长——上界卡紧等于"永远等不到"，这条断言会在
+     食物多的布局下必挂，看起来还像"服务端没生效"；
   ④ 让整场确定化靠**给所有端挂护盾**：`resolveEatings` 只在受害者侧查 `isProtected`，
      所以挂护盾的球死不了、却照样吃得掉人；不这么做就会随机有人被 AI 吃掉、摆位变 no-op；
   ⑤ 收尾的 exit code 要从 judge 的结果数组派生，另写一份条件会出现"打了 ✗ 却说全部通过"。
+  ⑥ **每条断言的口径都要与"这段时间里还会发生什么"相容**：增量类断言（上界）会把
+     路过被顺带吃掉的其他球、以及球站着吃到的食物一起算进来（实测吃球方增量在
+     +85 ~ +267 之间跳，取决于 AI 路过没路过与那几秒的食物密度）。写死上界就是在赌这些。
+     只卡下界（服务端有没有执行 absorb）并把 kills 打出来，精确算式交给单测。
+  ⑦ **稳态指标只在"全员在线"那段窗口里量**：断线重连阶段有一端是断的、还有一个只活了 1.5s
+     的重连端，把它们算进平均值就是拿"没收到包"去稀释指标，量出 12.7Hz 然后去查一个没坏的问题。
+  ⑧ **收到事件 ≠ 视图已更新**：服务端先广播 `left` 再发下一帧快照，客户端隔一帧（50ms + 单向延迟）
+     才把组从视图里剔掉。断言"已移除"要等**视图真的消失**，事件一到就读必然读到旧状态。
 - 调仿真参数一律用 **flag**，别用位置参数：`scripts/args.js` 会在 flag 的值和位置参数
   撞值时直接报错（旧的解析器会静默串位，把 `escapeFoodWeight` 赋成 90，整组数据作废）。
 - 调手感参数前先读 [docs/tuning.md](docs/tuning.md)：里面有公式、当前值、实测数据与验收口径
