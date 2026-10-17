@@ -7,7 +7,7 @@
 //
 // 渲染口径：所有球（含自己的）都按「快照时间 - 100ms」在两帧快照间插值，
 // 这是 M1 的诚实做法；本地预测是 M3 的事（TODO.md），不要在这里偷偷加。
-import { COLORS, FOOD, WORLD } from '../config.js';
+import { COLORS, FOOD, NET, SPLIT, WORLD } from '../config.js';
 import { Ball } from '../core/ball.js';
 import { configHash } from '../core/config-hash.js';
 import { aiKey, cellKey, decodeBall } from '../core/protocol.js';
@@ -18,6 +18,7 @@ const INPUT_EVERY_FRAMES = 2; // 输入最多 30Hz（按游戏帧计，变化才
 const RECONCILE_PER_SNAPSHOT = 0.15; // 对账：每次快照把预测误差拉回 15%（≈0.3s 收敛）
 const SNAP_ERROR_RATIO = 1; // 误差超过「半径 × 1」直接吸附（被吃/被挤开/传送，预测错了就认）
 const SNAP_TIMEOUT_MS = 5000;
+const RESUME_STORAGE_KEY = 'superpop:resumeToken';
 
 // socket.io 的浏览器端由服务端托管（/socket.io/socket.io.js），
 // 按需注入 <script>：单机玩家不付这份请求。
@@ -38,20 +39,33 @@ export class NetSession {
     constructor() {
         this.socket = null;
         this.world = null; // welcome 之后是 NetWorld
-        this.onEvent = () => {}; // Game 注入：eaten / crowned / left / disconnected
+        this.onEvent = () => {}; // Game 注入: eaten / crowned / left / netdown / resumed / disconnected
         this.inputFrames = 0; // 游戏帧计数（sendInput 的节流基准）
         this.lastSentFrame = 0;
         this.lastInput = { x: NaN, y: NaN };
+        // 断线重连要用回来的东西：名字、视口、上次拿到的认领令牌
+        this.name = '';
+        this.viewport = null;
+        this.token = '';
+        this.death = null; // 重连时服务端告知"宽限期内你被吃光了"的死亡瞬间数据
+        // 断线后为 true：本地预测与输入上行都停（服务端那边输入已清零，
+        // 还按老样子推的话球会在本地继续漂，重连后又被吸附回去，看着像抽搐）
+        this.suspended = false;
+        this.reconnecting = false;
+        this.closed = false; // disconnect() 是我们自己主动断的，别触发重连
     }
 
     // 连接 + join + 等 welcome。失败抛错（房间满 / 版本不一致 / 连不上），
     // 调用方把错误显示给玩家。
-    async join({ name, viewport }) {
+    // token 非空时走「认领」路径：服务端会用原 ownerId 与原细胞把组还回来。
+    async join({ name, viewport, token = '' }) {
         await loadSocketIo();
         // 直连 websocket：默认的轮询回退会在弱网/防火墙下反复升降级，表现为卡顿。
-        // reconnection 关掉：自动重连是半成品路径（重连后状态不恢复），断线走 UI 弹层
+        // reconnection 关掉：自动重连由 NetSession.resume 自己管（要拿令牌认领、
+        // 要控制退避、还要在恢复后重挂一遍监听），交给 socket.io 就管不了这些。
         const socket = window.io({ transports: ['websocket'], timeout: SNAP_TIMEOUT_MS, reconnection: false });
         this.socket = socket;
+        this.closed = false;
         let welcome;
 
         try {
@@ -70,7 +84,7 @@ export class NetSession {
                         resolve(errOrWelcome);
                     }
                 };
-                socket.on('connect', () => socket.emit('join', { name, viewport }));
+                socket.on('connect', () => socket.emit('join', { name, viewport, token }));
                 socket.on('welcome', (w) => {
                     if (w.configHash !== configHash()) {
                         finish(new Error('两端版本不一致：请刷新页面（Ctrl+F5）后重进'));
@@ -86,9 +100,22 @@ export class NetSession {
             throw err;
         }
 
+        this.name = welcome.resumed ? this.name : name;
+        this.viewport = viewport;
+        this.token = welcome.resumeToken || '';
+        this.death = welcome.death || null;
+        this.rememberToken();
+
         // welcome 不含场上实体的快照帧（food/roster/board 除外），等第一帧 snapshot
         // 把球补齐再开始渲染，避免"先看到空世界再突然出现一群球"。
         this.world = new NetWorld(welcome, await this.firstSnapshot());
+        this.attachHandlers(socket);
+        return this.world;
+    }
+
+    // snapshot / roster / 各类事件的监听：**每次 join（含重连）都要重挂一遍**。
+    // 只写处理器不绑监听是本项目踩过的坑（事件静默丢失、状态卡死）。
+    attachHandlers(socket) {
         socket.on('snapshot', (snap) => this.world.applySnapshot(snap));
         // roster 广播的载荷是 { entries }（join/离开时服务端发的），welcome 里才是裸数组
         socket.on('roster', (payload) => this.world.applyRoster(payload.entries));
@@ -96,8 +123,79 @@ export class NetSession {
         socket.on('crowned', (payload) => this.onEvent({ type: 'crowned', ...payload }));
         socket.on('newRound', (payload) => this.onEvent({ type: 'newRound', ...payload }));
         socket.on('left', (payload) => this.onEvent({ type: 'left', ...payload }));
-        socket.on('disconnect', () => this.onEvent({ type: 'disconnected' }));
-        return this.world;
+        socket.on('disconnect', () => this.handleDisconnect());
+    }
+
+    // 断线：自己退避重连，而不是立刻回菜单。
+    // 为什么不是直接 disconnected：手机上锁屏、切 Wi-Fi、进电梯都会断一下就回来，
+    // 一次断线就把玩家踢出对局、还要重新起名，太粗。服务端有 NET.graceSeconds 的
+    // 宽限期在等着认领原细胞（server/index.js）。
+    // 重试全失败（或压根没有令牌可认领）才报 disconnected 交回菜单。
+    handleDisconnect() {
+        if (this.closed) {
+            return; // disconnect() 主动断的，调用方自己处理
+        }
+        this.suspended = true;
+        if (!this.token) {
+            this.onEvent({ type: 'disconnected' });
+            return;
+        }
+        this.onEvent({ type: 'netdown' });
+        this.resume();
+    }
+
+    // 退避重连：重连成功 = 认领回原来的细胞（同 ownerId / 同 cid，ghost 不瞬移）。
+    // 重试窗口要略大于服务端宽限期（NET 注释里有推导），否则会出现
+    // "客户端还在重试、服务端已经把人删了" → 认领失败、退化成新人进场的空档。
+    async resume() {
+        if (this.reconnecting) {
+            return false;
+        }
+        this.reconnecting = true;
+        let delay = NET.reconnectDelayMs;
+        try {
+            for (let attempt = 0; attempt < NET.reconnectTries; attempt += 1) {
+                try {
+                    await this.join({ name: this.name, viewport: this.viewport, token: this.token });
+                    this.suspended = false;
+                    this.onEvent({ type: 'resumed', death: this.death });
+                    return true;
+                } catch {
+                    // 认领失败（房主没开、退避期间 socket 一直没建起来）就等下一拍
+                    await new Promise((resolve) => setTimeout(resolve, delay));
+                    delay = Math.min(NET.reconnectMaxDelayMs, delay * NET.reconnectBackoff);
+                }
+            }
+        } finally {
+            this.reconnecting = false;
+        }
+        // 退避用尽：服务端那边多半也已经过了宽限期（组被移除），认不回来了
+        this.onEvent({ type: 'disconnected' });
+        return false;
+    }
+
+    // 令牌放 sessionStorage：手机上进后台被系统回收页面、或手动刷新之后回来，
+    // 还能认领回同一颗球而不是变成场上的另一个人。
+    rememberToken() {
+        try {
+            if (this.token) {
+                window.sessionStorage.setItem(RESUME_STORAGE_KEY, this.token);
+            } else {
+                window.sessionStorage.removeItem(RESUME_STORAGE_KEY);
+            }
+        } catch {
+            // 隐私模式下 sessionStorage 可能抛异常。存不下只是少了一条认领路径，
+            // 不影响正常联机，所以这里不往上抛（抛了会挡住整局进场）。
+        }
+    }
+
+    // 上次留存的认领令牌（页面刷新/重新进场后想认领同一颗球时用）
+    static savedToken() {
+        try {
+            return window.sessionStorage.getItem(RESUME_STORAGE_KEY) || '';
+        } catch {
+            return '';
+        }
     }
 
     // 等第一帧 snapshot（welcome 与它之间只有几毫秒；错过一帧最多多等 50ms）
@@ -116,7 +214,7 @@ export class NetSession {
     //（实测：机器人整个觅食期只有头 2 个包发出去，球原地不动）。
     // TCP 不丢包，服务器持有最后一份输入，不需要心跳。值取两位小数，砍掉浮点噪声。
     sendInput(x, y) {
-        if (!this.socket) {
+        if (!this.socket || this.suspended) {
             return;
         }
         this.inputFrames += 1;
@@ -150,11 +248,20 @@ export class NetSession {
     }
 
     disconnect() {
+        this.closed = true;
+        this.suspended = false;
         if (this.socket) {
             this.socket.disconnect();
             this.socket = null;
         }
         this.world = null;
+        this.token = '';
+        this.death = null;
+        try {
+            window.sessionStorage.removeItem(RESUME_STORAGE_KEY);
+        } catch {
+            // 存不进去无所谓（见 rememberToken 的说明）
+        }
     }
 }
 
@@ -387,7 +494,37 @@ export class NetWorld {
         if (snap.board) {
             this.board = snap.board;
         }
+        this.detectMyMerge(mine);
         this.reconcileMine(mine);
+    }
+
+    // 合并反馈：自己这一帧活细胞变少、又没全灭 → 一定是两个分身合并了（本地补一次顿挫）。
+    //
+    // 服务端不下发这个量（纯表现，白占带宽），客户端由「细胞数变化」推断。
+    // **只判自己这一组**：别人的组少一颗也可能是离开 AOI（不是死、不是合并），
+    // 拿合并去演会演出一段根本不存在的顿挫。
+    detectMyMerge(mine) {
+        if (!mine) {
+            return;
+        }
+        let alive = 0;
+        let best = null;
+        for (const cell of mine.cells) {
+            if (cell.alive) {
+                alive += 1;
+                if (!best || cell.r > best.r) {
+                    best = cell;
+                }
+            }
+        }
+        const shrunk = this.prevAliveCells !== undefined
+            && this.prevAliveCells > alive
+            && alive > 0; // 全灭是"被吃"，由 eaten 事件演死亡，不演合并
+        if (shrunk && best) {
+            best.mergeStun = SPLIT.mergeStunSeconds;
+            best.mergeWobble = SPLIT.mergeStunWobble;
+        }
+        this.prevAliveCells = alive;
     }
 
     // 自己组的预测对账。本地模拟与服务端是同一套 Ball.update，误差主要来自
@@ -496,7 +633,13 @@ export class NetWorld {
 
     // 每渲染帧调用：推进插值时钟（远程球），并用本地输入推进自己的细胞（预测）。
     // localInput 传 Game.input——自己的球要的是"零延迟响应"，不是插值。
-    tick(dt, localInput) {
+    // frozen=true（断线重连期间）：整个世界**冻住**。服务端那边输入已清零、
+    // 快照也没人发，本地再按旧输入推只会让球自己漂一小段，重连后又吸附回去——
+    // 玩家看到的是"球自己动了又被拽回来"，比冻住更让人以为游戏出 bug。
+    tick(dt, localInput, frozen = false) {
+        if (frozen) {
+            return;
+        }
         this.renderTime += dt;
         const target = this.time - INTERP_DELAY;
         // 落后太多（切后台/卡顿）就 4 倍速追：硬跳会让所有远程球瞬移一帧，看起来像卡顿；

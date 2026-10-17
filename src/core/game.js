@@ -4,6 +4,7 @@ import {
     DEATH,
     DIFFICULTY,
     FOOD,
+    NET,
     NICKNAME,
     PLAYER,
     PLAYER_OWNER,
@@ -201,12 +202,36 @@ export class Game {
             this.onRoundEnded(event);
         } else if (event.type === 'newRound') {
             this.onNewRound();
+        } else if (event.type === 'netdown') {
+            // 断线但还在重连窗口内：清输入 + 世界冻住（NetWorld.tick 的 frozen），
+            // 提示条说清楚"正在重连"而不是直接把人丢回菜单（见 NetSession.handleDisconnect）
+            this.input.speedX = 0;
+            this.input.speedY = 0;
+            this.hud.showNetError(`连接中断，正在重连…（${NET.graceSeconds} 秒内可回到原球）`);
+        } else if (event.type === 'resumed') {
+            this.onResumed(event.death);
         } else if (event.type === 'disconnected') {
             this.state = 'menu';
             this.net.disconnect();
             this.net = null;
             this.hud.showStart();
             this.hud.showNetError('与服务器的连接已断开');
+        }
+    }
+
+    // 重连成功：世界重新对上了（新的 NetWorld，细胞位置以服务端为准）。
+    // ① 清掉提示；② 镜头 snap 到当前最大的分身——重连期间画面是冻住的，
+    //    恢复后不 snap 的话镜头会从旧位置慢慢飘过去，看着像"球瞬移"；
+    // ③ 宽限期内被 AI 吃光的话直接进结算（玩家点"重新上场"走 again 重生）。
+    onResumed(death) {
+        this.hud.showNetError('');
+        this.netHadCells = false;
+        this.camera.snapTo(this.largestCell());
+        this.updateViewScale(0, true);
+        this.needsRedraw = true;
+        if (death) {
+            const stats = (this.myGroup() && this.myGroup().stats) || { playTime: 0, foodEaten: 0, kills: 0 };
+            this.onPlayerEaten(death.mass, death.rank, null, stats);
         }
     }
 
@@ -435,8 +460,9 @@ export class Game {
         if (this.net) {
             // 联机：世界在服务端。远程球走插值；自己的细胞走本地预测（零输入延迟），
             // 快照到达时平滑对账。结算弹层期间（dead/crowned）世界照常走——你能看着对局继续。
-            this.net.world.tick(dt, this.input);
-            if (this.state === 'playing') {
+            // 断线重连窗口内 frozen：输入清零、世界冻住（服务端那边也是这样）。
+            this.net.world.tick(dt, this.input, this.net.suspended);
+            if (this.state === 'playing' && !this.net.suspended) {
                 this.net.sendInput(this.input.speedX, this.input.speedY);
             }
             // 自己的细胞从无到有（进场/重生）：镜头立刻就位，别从死亡点慢慢飘过去

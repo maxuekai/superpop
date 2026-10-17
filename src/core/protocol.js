@@ -14,7 +14,11 @@ import { COLORS } from '../config.js';
 
 // 与快照形状绑定的版本号。configHash 把 PROTOCOL_VERSION 也算进去：
 // join 时两端不一致就当场 rejected，而不是进游戏后看到一堆错位的球。
-export const PROTOCOL_VERSION = 2;
+//
+// v3（断线重连，M4）：welcome 增加 resumeToken / resumed / dead 三个字段。
+// 严格说这不影响既有元组的解码，但**形状变了就是变了**：v2 客户端会读不到
+// resumeToken，重连后拿不到令牌就退化成"重新加入一个新人"。按三步走纪律照样 +1。
+export const PROTOCOL_VERSION = 3;
 
 // 坐标/半径 ×2 量化：世界 1280 → ×2 后仍在 uint16 范围，精度 0.5 世界单位（球半径 ≥12，够用）
 export const quantize = (v) => Math.round(v * 2);

@@ -6,13 +6,20 @@
 // - 20Hz 给每个客户端广播 AOI 快照：视口±边距内的球 + 食物增量（量化坐标）
 //
 // 事件协议（唯一权威定义，改动需两端同步并更新 AGENTS.md）：
-//   C→S  join{name,viewport{w,h}} / input{x,y} / split / again{name} / viewport{w,h}
+//   C→S  join{name,viewport{w,h},token?} / input{x,y} / split / again{name} / viewport{w,h}
 //        （全部按 socket 令牌桶限频：input 60/s，其余 10/s，超限静默丢包）
-//   S→C  welcome{selfId,time,configHash,world,food,roster,board,roundRemaining}
+//   S→C  welcome{selfId,time,configHash,world,food,roster,board,roundRemaining,
+//                resumeToken,resumed,death{mass,rank}|null}
 //        snapshot{t,cells[],ai[],food{a[],e[]},board?,my{stats,lastSplitAt}}
 //        roster{entries} / eaten{mass,rank,by,stats} / crowned{ownerId,name,mass,countdown} /
 //        newRound{time} / left{id} / rejected{reason}
 //   结算期（ending）世界冻结但快照照常按门控发射——中途加入者靠首帧快照进结算界面。
+// 断线重连（M4，v3）：断线后细胞留在场上、输入清零，NET.graceSeconds 内带
+//   join.token=上次的 welcome.resumeToken 重连即可认领**原来的细胞**（ownerId 与 cid 不变，
+//   客户端 ghost 不会瞬移）；超期才 removeGroup + 广播 left。宽限期内被 AI 吃光的话，
+//   welcome.death 带上死亡瞬间的质量与名次，客户端据此直接进结算界面。
+//   认领的判断在「房间已满」之前——宽限期内的组本来就占着名额，
+//   反过来判会把自家重连挡在门外。
 // 旧 server 的 registe/create/enter/update（含拼写错误）一并废弃。
 //
 // cells[] / ai[] 的元组形状（v2）：[ownerId, cid, x, y, r, shielded, colorIdx]，坐标 ×2。
@@ -31,7 +38,7 @@ import { Server } from 'socket.io';
 
 import { prepareQr } from './qr-startup.js';
 
-import { AI, FOOD, JOYSTICK, KING, PLAYER, VIEW, WORLD } from '../src/config.js';
+import { AI, FOOD, JOYSTICK, KING, NET, PLAYER, VIEW, WORLD } from '../src/config.js';
 import { groupMass } from '../src/core/rules.js';
 import { configHash } from '../src/core/config-hash.js';
 import { colorIndex, encodeBall, quantize } from '../src/core/protocol.js';
@@ -43,6 +50,10 @@ const ROUND_RESTART_SECONDS = 8; // 称王即终局：全场结算后倒计时�
 const AOI_MARGIN_RATIO = 0.6; // AOI 边距：视口尺寸的 60%，盖住相机死区(35%)与插值余量
 const MAX_PLAYERS = 8; // 人数上限（2026-10-11 产品决策，见 TODO.md M4）
 const NICKNAME_MAX = 12;
+// 断线宽限期：断线后细胞留在场上（不再被操控），期内带 resumeToken 重连可认领原细胞。
+// env 覆盖只给仿真用——net-sim 要跑「宽限期内认领」和「宽限期满被移除」两条断言，
+// 等不起真实的 10s。真机跑的是 NET.graceSeconds。
+const GRACE_MS = Math.max(200, Number(process.env.SUPERPOP_GRACE_MS) || NET.graceSeconds * 1000);
 
 // ---------- 静态文件（沿用 dev-server 的白名单方案） ----------
 
@@ -194,8 +205,57 @@ function myPayload(ownerId) {
 
 // ---------- 会话与消息 ----------
 
-const sessions = new Map(); // socket.id -> { ownerId, viewport }
+const sessions = new Map(); // socket.id -> { ownerId, viewport, token }
 let nextOwnerId = 1;
+let nextToken = 1;
+
+// 断线宽限登记表：resumeToken -> { ownerId, expiresAt, timer }
+// 断线时细胞**留在场上**（输入清零、站着不动，可能被 AI 吃掉），
+// 期内用同一个 token 重连就认领回来：ownerId 与 cid 都不变，
+// 所以客户端的 ghost 不会被当成"新球"、也不会瞬移。
+// 宽限期满（或被认领）才真正 removeGroup + 广播 left。
+const graceList = new Map();
+
+function newToken() {
+    const token = `t${nextToken}`;
+    nextToken += 1;
+    return token;
+}
+
+// 场上人类数：**数 world.groups 里的 p 组，不是 sessions.size**。
+// 断线宽限期内的玩家已经不在 sessions 里了（socket 没了），但他的组还在场上、
+// 仍然占名额——用 sessions.size 会少算，日志就会显示"1/8"而实际已经 3 人。
+// join 的满员判断也用同一个口径。
+function humansOnField() {
+    let count = 0;
+    for (const ownerId of world.groups.keys()) {
+        if (String(ownerId).startsWith('p')) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+function sendWelcome(socket, session, { resumed = false } = {}) {
+    const group = world.groups.get(session.ownerId);
+    socket.emit('welcome', {
+        selfId: session.ownerId,
+        time: world.time,
+        configHash: configHash(), // 注意要调用：简写会把函数本身发出去（序列化成 undefined）
+        world: { width: WORLD.width, height: WORLD.height },
+        food: world.foodList.map(encodeFood),
+        roster: buildRoster(),
+        board: world.leaderboard(session.ownerId),
+        roundRemaining: roundRemainingSeconds(), // 中途加入碰上结算期：客户端直接进倒计时
+        // 断线重连（M4）：令牌由服务端签发，重连时带回即可认领原细胞。
+        // death 非 null = 宽限期内这组被吃光了（mass/rank 取死亡瞬间的值，
+        // 因为此刻 cells 全是 alive=false，客户端自己算出来只会是 0kg），
+        // 客户端据此直接进结算界面，而不是"回来了能动却看不到球"。
+        resumeToken: session.token,
+        resumed,
+        death: resumed && session.death ? session.death : null,
+    });
+}
 
 function log(text) {
     console.log(`[${new Date().toLocaleTimeString()}] ${text}`);
@@ -255,7 +315,7 @@ function startNewRound() {
     }
     world.reset();
     io.emit('newRound', { time: world.time });
-    log(`新的一局开始（场上人类 ${sessions.size}/${MAX_PLAYERS}）`);
+    log(`新的一局开始（场上人类 ${humansOnField()}/${MAX_PLAYERS}）`);
 }
 
 io.on('connection', (socket) => {
@@ -271,7 +331,37 @@ io.on('connection', (socket) => {
         if (session) {
             return; // 重复 join 忽略
         }
-        const humans = [...world.groups.keys()].filter((id) => String(id).startsWith('p')).length;
+        // ---- 断线重连：先看能不能用令牌认领回原来那组细胞 ----
+        // 顺序很重要：认领要在「人数已满」的判断**之前**。宽限期内的组本来就占着
+        // MAX_PLAYERS 的名额（它还在场上），反过来判会把自家重连挡在门外。
+        const token = typeof payload.token === 'string' ? payload.token.slice(0, 32) : '';
+        const held = token ? graceList.get(token) : null;
+        if (held) {
+            const group = world.groups.get(held.ownerId);
+            if (!group) {
+                // 组已经没了（不该发生：移除时会同步清登记表）。清掉走新建流程，
+                // 而不是把玩家挂死在一个永远认领不回来的令牌上。
+                graceList.delete(token);
+            } else {
+                clearTimeout(held.timer);
+                graceList.delete(token);
+                // 组在宽限期内被吃光的话，把死亡瞬间的数据留给客户端弹结算
+                const dead = !group.cells.some((cell) => cell.alive);
+                session = {
+                    ownerId: held.ownerId,
+                    viewport: payload.viewport || null,
+                    token,
+                    death: dead ? { mass: held.deathMass || 0, rank: held.deathRank ?? null } : null,
+                };
+                sessions.set(socket.id, session);
+                sendWelcome(socket, session, { resumed: true });
+                socket.broadcast.emit('roster', { entries: buildRoster() });
+                log(`玩家重连认领 ${group.name}（${held.ownerId}），剩余宽限 ${Math.max(0, Math.round((held.expiresAt - Date.now()) / 1000))}s`
+                    + (dead ? '（宽限期内已被吃光，客户端直接进结算）' : ''));
+                return;
+            }
+        }
+        const humans = humansOnField();
         if (humans >= MAX_PLAYERS) {
             socket.emit('rejected', { reason: `房间已满（上限 ${MAX_PLAYERS} 人）` });
             return;
@@ -281,19 +371,10 @@ io.on('connection', (socket) => {
         const group = world.addGroup(ownerId, sanitizeName(payload.name));
         // 保护从真正进场算起（与单机 begin() 同一规则：World 不发保护，调用方发）
         group.cells[0].grantShield(PLAYER.spawnShield, world.time);
-        session = { ownerId, viewport: payload.viewport || null };
+        session = { ownerId, viewport: payload.viewport || null, token: newToken() };
         sessions.set(socket.id, session);
 
-        socket.emit('welcome', {
-            selfId: ownerId,
-            time: world.time,
-            configHash: configHash(), // 注意要调用：简写会把函数本身发出去（序列化成 undefined）
-            world: { width: WORLD.width, height: WORLD.height },
-            food: world.foodList.map(encodeFood),
-            roster: buildRoster(),
-            board: world.leaderboard(ownerId),
-            roundRemaining: roundRemainingSeconds(), // 中途加入碰上结算期：客户端直接进倒计时
-        });
+        sendWelcome(socket, session);
         socket.broadcast.emit('roster', { entries: buildRoster() });
         log(`玩家加入 ${group.name}（${ownerId}），场上人类 ${humans + 1}/${MAX_PLAYERS}`);
     });
@@ -363,12 +444,43 @@ io.on('connection', (socket) => {
         if (!session) {
             return;
         }
-        const group = world.groups.get(session.ownerId);
-        world.removeGroup(session.ownerId);
+        const token = session.token;
         sessions.delete(socket.id);
-        io.emit('left', { id: session.ownerId });
+        const group = world.groups.get(session.ownerId);
+        if (!group) {
+            return;
+        }
+        // 断线不立刻移除：细胞留在场上，只是没人操控了（M4 断线重连）。
+        // 输入必须清零——否则它会带着最后一帧的方向一直漂，看起来像"还活着"。
+        group.input.speedX = 0;
+        group.input.speedY = 0;
+        const entry = {
+            ownerId: session.ownerId,
+            expiresAt: Date.now() + GRACE_MS,
+            timer: null,
+        };
+        entry.timer = setTimeout(() => {
+            // 被认领过的话登记表里已经没有这一条；这里再确认一次是为了
+            // "认领与超时同时发生"时不误删别人的组
+            if (graceList.get(token) !== entry) {
+                return;
+            }
+            graceList.delete(token);
+            const victim = world.groups.get(entry.ownerId);
+            world.removeGroup(entry.ownerId);
+            io.emit('left', { id: entry.ownerId });
+            io.emit('roster', { entries: buildRoster() });
+            log(`宽限期结束，移除 ${victim ? victim.name : entry.ownerId}（${humansOnField()}/${MAX_PLAYERS}）`);
+        }, GRACE_MS + 50);
+        // 定时器不许吊住进程：仿真/测试会提前结束进程
+        if (typeof entry.timer.unref === 'function') {
+            entry.timer.unref();
+        }
+        graceList.set(token, entry);
+        // 不发 left：人还在场上，名字也还在花名册里（只是操控权没了）。
+        // 花名册要重发是因为 AI 超编移除等变化顺带进来，兼带让对端刷新一次。
         io.emit('roster', { entries: buildRoster() });
-        log(`玩家离开 ${group ? group.name : session.ownerId}，场上人类 ${sessions.size}/${MAX_PLAYERS}`);
+        log(`玩家断线 ${group.name}（${session.ownerId}），宽限 ${GRACE_MS / 1000}s 内可重连认领（场上人类 ${humansOnField()}/${MAX_PLAYERS}）`);
     });
 
     // 测试钩子：把自己顶到称王线上，验证"称王即终局"全流程不用真打几分钟。
@@ -431,6 +543,15 @@ world.onEvent = (event) => {
                 by: event.by ? event.by.name : null,
                 stats: myPayload(event.ownerId).stats,
             });
+        } else {
+            // 人在宽限期内（断线中）：事件没 socket 可发，但死亡瞬间的数据要留着，
+            // 否则他重连回来只会看到"没有球"和一个算不出名次的 0kg 结算。
+            for (const entry of graceList.values()) {
+                if (entry.ownerId === event.ownerId) {
+                    entry.deathMass = event.mass;
+                    entry.deathRank = event.rank;
+                }
+            }
         }
     } else if (event.type === 'crowned' && roundState === 'playing') {
         // 称王即终局：全场结算 + 倒计时，倒计时到点由主循环 startNewRound

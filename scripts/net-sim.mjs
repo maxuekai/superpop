@@ -4,12 +4,15 @@
 // 的浏览器里手测过一次（预测误差 4 单位）。0 毫秒下所有网络问题都不存在，
 // 于是"150ms 延迟下预测会不会飘、带宽会不会爆"就一直是没有证据的假设。
 //
-// 它验证三件事（对应 TODO.md M3 的验收线）：
+// 它验证四件事（对应 TODO.md M3/M4 的验收线）：
 //   ① 预测误差：自己的球按本地输入即时推进（输入→画面 1 帧），快照到达后对账。
 //      验收：平均误差 < 视口宽 2%，且输入突变后 500ms 内收敛回阈值内。
 //   ② 互吃两端一致：用服务端 debug:place 钩子确定性造一次互吃，断言被吃方收到 eaten、
 //      自己的视图知道死了、旁观端的视图里那颗球消失且吃球方质量对得上——四处一致才算。
 //   ③ 带宽预算与快照频率：按 TCP 代理实测的每端下行字节数算 B/s。
+//   ④ 断线重连：宽限期内重连要**认领回原来的细胞**（同 ownerId、同 cid），
+//      宽限期满则被真正移除并广播 left。真实宽限是 10s，这里用 SUPERPOP_GRACE_MS
+//      把它压到 1.2s——断言要的是语义（认领成功 / 到期移除），不是那个具体秒数。
 //
 // 延迟是用 **TCP 代理**注入的（不是改 socket.io 的内部计时器）：传输层无关、
 // 不会因为 socket.io 换传输方式就失效。注入的是**单向**延迟，RTT = 2 倍。
@@ -50,7 +53,13 @@ const STEP = 1 / 60;
 // ---------- 起服务端 ----------
 function startServer(port) {
     const child = spawn(process.execPath, [join(ROOT, 'server', 'index.js')], {
-        env: { ...process.env, PORT: String(port), SUPERPOP_DEBUG: '1' },
+        env: {
+            ...process.env,
+            PORT: String(port),
+            SUPERPOP_DEBUG: '1',
+            // 断线宽限期压到 1.2s：真机值是 10s，仿真里等 10s 只为验一个语义不划算
+            SUPERPOP_GRACE_MS: '1200',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -115,9 +124,11 @@ class SimClient {
         this.input = { x: 0, y: 0 };
         this.net = null;
         this.ownerId = null;
+        this.token = null; // welcome.resumeToken：断线重连的认领凭证
     }
 
-    connect(url) {
+    // token 传入 = 走「认领」路径（断线后重连）。传空 = 新玩家进场。
+    connect(url, { token = '' } = {}) {
         return new Promise((resolve, reject) => {
             const socket = io(url, {
                 transports: ['websocket'],
@@ -129,7 +140,7 @@ class SimClient {
             const timer = setTimeout(() => reject(new Error(`${this.label} 连接超时`)), 15000);
 
             socket.on('connect', () => {
-                socket.emit('join', { name: this.name, viewport: this.viewport });
+                socket.emit('join', { name: this.name, viewport: this.viewport, token });
             });
             socket.on('welcome', (w) => {
                 // 与真实客户端同一道关：两端 configHash 不一致当场拒绝，不带着错位的值进游戏
@@ -140,6 +151,8 @@ class SimClient {
                 }
                 welcome = w;
                 this.ownerId = w.selfId;
+                this.token = w.resumeToken;
+                this.welcome = w;
             });
             socket.on('snapshot', (snap) => {
                 this.snapshots += 1;
@@ -273,8 +286,11 @@ async function waitFor(clients, fn, timeoutMs, label, client = null) {
 }
 
 // 客户端视图是否已经跟上服务端：位置到了附近、半径不小于摆的目标值太多。
-// ⚠ 半径只能用**相对**容差：球在持续吃食物长大，摆完位 r=40 的球几秒就长到 41.5，
-// 卡死容差（±0.6）的话这条永远等不到，会被误判成"摆位没生效"。
+// ⚠ 半径只能用**相对**容差，且**只卡下界**：球在持续吃食物长大，摆完位 r=40 的球
+// 几秒就长到 41.5，卡死容差（±0.6）的话这条永远等不到，会被误判成"摆位没生效"。
+// ⚠ 上界也必须放宽到很松（r × 3）：摆完位球是**静止**的，r=15 的球吃几秒食物就长到 19，
+// 半径单调增长 —— 上界卡得紧就等于"永远等不到"，于是这条断言在食物多的布局下必挂，
+// 而且挂的时候会让人以为服务端没生效。上界只留一个粗 sanity（认得出是同一颗量级的球）。
 // ⚠ 位置必须取 referenceSample（快照里的服务端权威值，已按快照年龄外推），
 // **不能直接取 cell.x**：自己的球在客户端是本地预测的，每帧都在按输入移动，
 // 摆完位还会继续漂，拿它判"到位没"会永远等不到。
@@ -292,8 +308,7 @@ function cellSeenAt(client, x, y, r) {
     if (!ref) {
         return false;
     }
-    const rTol = Math.max(2, r * 0.2);
-    return ref.r >= r - 0.6 && ref.r <= r + rTol && Math.hypot(ref.x - x, ref.y - y) <= 6;
+    return ref.r >= r - 0.6 && ref.r <= r * 3 && Math.hypot(ref.x - x, ref.y - y) <= 6;
 }
 
 // 确保这端活着，必要时重生。
@@ -431,6 +446,11 @@ async function runOne(delayMs, seconds) {
         const observerHunter = observer.net.groups.get(hunter.ownerId);
         const observerHunterMass = observerHunter ? groupMass(observerHunter.cells) : 0;
 
+        // ---------- 稳态指标：只量阶段 1~2 这段"全员在线"的时间 ----------
+        // ⚠ 必须在阶段 4（断线重连）**之前**算完：阶段 4 里旁观端会断线、
+        // 还会多出一个只活了 1.5s 的重连端，把它们算进平均值就是拿
+        // "断线期间没收到包"去稀释快照频率——量出来 12.7Hz 然后去查一个根本没坏的问题。
+        // 同理带宽：断线期间下行是 0，算进去只会让预算断言变松。
         const elapsed = (Date.now() - t0) / 1000;
         const snapHz = clients.map((c) => {
             const gaps = [];
@@ -448,6 +468,46 @@ async function runOne(delayMs, seconds) {
             label: clients[i].label,
             bps: c.down / elapsed,
         }));
+        const hunterKills = hunter.net.myGroup().stats.kills;
+
+        // ---------- 阶段 4：断线重连（M4 宽限期） ----------
+        // 用**旁观端**当重连主角：阶段 2 之后 prey 已经被吃光（组里没有活细胞），
+        // 拿它验不了"认领回原细胞"，只能验"重连后发现被吃了"。旁观端有全程护盾，
+        // 断线期间那颗球确实还活着，正好验两条路径：
+        //   a) 断线 → 细胞**留在场上**（别的端仍看得见），期内带令牌重连能认领回
+        //      **同一个 ownerId、同一个 cid**（cid 不变是关键：变了就是"换了个新人"，
+        //      客户端 ghost 会全部重画）；
+        //   b) 断了不回来 → 宽限期满被真正移除并广播 left。
+        const rejoinOwner = observer.ownerId;
+        const rejoinToken = observer.token;
+        const rejoinCids = observer.net.myGroup().cells.map((c) => c.cid).sort((a, b) => a - b);
+        observer.close();
+        await pump([hunter, prey], 300);
+        const hunterStillSees = (() => {
+            const g = hunter.net.groups.get(rejoinOwner);
+            return Boolean(g) && g.cells.length > 0;
+        })();
+
+        const rejoin = new SimClient('丙(重连)', '丙', { w: 1280, h: 720 });
+        clients.push(rejoin);
+        await rejoin.connect(url, { token: rejoinToken });
+        const reclaimedOwner = rejoin.ownerId === rejoinOwner;
+        const reclaimedCids = JSON.stringify(rejoin.net.myGroup().cells.map((c) => c.cid).sort((a, b) => a - b))
+            === JSON.stringify(rejoinCids);
+        const rejoinAlive = rejoin.aliveCells();
+
+        // 这次不认领了：让宽限期走完，断言"到期移除 + 广播 left"。
+        // ⚠ 等的是**视图里真的消失**，不是"left 事件到了"：服务端在同一个 tick 里
+        // 先 removeGroup 再广播 left、再发下一帧快照，客户端是先收到事件、
+        // 隔一帧快照（50ms + 单向延迟，150ms 档约 250ms）才把组从 NetWorld 里剔掉。
+        // 事件一到就读视图，读到的必然还是旧状态——这个坑在 80ms 档不一定复现。
+        const leftMark = hunter.events.length;
+        rejoin.close();
+        await waitFor([hunter, prey], () => !hunter.net.groups.has(rejoinOwner),
+            6000, '宽限期满后从旁观端视图消失', hunter);
+        const removedFromHunter = !hunter.net.groups.has(rejoinOwner);
+        const leftBroadcast = hunter.events.slice(leftMark)
+            .some((e) => e.type === 'left' && e.payload.id === rejoinOwner);
 
         return {
             delayMs,
@@ -466,6 +526,14 @@ async function runOne(delayMs, seconds) {
             snapHz,
             bandwidth,
             revived,
+            hunterKills,
+            hunterStillSees,
+            reclaimedOwner,
+            reclaimedCids,
+            rejoinAlive,
+            rejoinOwner,
+            removedFromHunter,
+            leftBroadcast,
         };
     } finally {
         for (const c of clients) {
@@ -507,9 +575,21 @@ for (const d of latencies) {
     judge('② eaten 事件里的死亡质量 = 吃之前的质量（两端对同一个数）',
         r.eatenEvt !== null && Math.abs(r.eatenEvt.mass - r.preyMassBefore) <= r.preyMassBefore * 0.15 + 20,
         `事件 ${Math.round(r.eatenEvt?.mass ?? NaN)} / 实测前 ${Math.round(r.preyMassBefore)}`);
-    judge('② 吃球方质量按 EAT.absorb 增长（服务端裁定生效）',
-        Math.abs((r.hunterMassAfter - r.hunterMassBefore) - r.expectedGain) <= r.expectedGain * 0.25 + 40,
-        `实际 +${Math.round(r.hunterMassAfter - r.hunterMassBefore)} / 期望 +${Math.round(r.expectedGain)}`);
+    // 吃球方质量按 EAT.absorb 增长（服务端裁定生效）。
+    // ⚠ 上界根本卡不了：增量会被两件事污染——① 摆完位吃球方站在原地，路过的 AI 会
+    // 自己撞上来被一起吃（kills > 1）；② 它同时在吃食物，r=40 站着几秒就是 +2 半径
+    // （≈ +200kg）。于是"增量必须正好等于 preyMass × absorb"在这条路径上不可测：
+    // 写死上界就是在赌 AI 路过没路过、食物稠不稠（同一份代码 150ms 档 +267、80ms 档 +85）。
+    // 服务端有没有真的执行 absorb 由下限保证（absorb 失效时增量≈0，跑不掉）；
+    // 精确算式由 `npm test` 的「absorb：质量按 r² 累加后开方」守着；
+    // "两端对同一个数"由下面那条「旁观端看到的吃球方质量与吃球方一致」守着。
+    {
+        const gain = r.hunterMassAfter - r.hunterMassBefore;
+        judge('② 吃球方质量至少按 EAT.absorb 增长（服务端裁定生效）',
+            r.hunterKills >= 1 && gain >= r.expectedGain * 0.7,
+            `实际 +${Math.round(gain)} / 期望 +${Math.round(r.expectedGain)}`
+            + `（吃球方 kills=${r.hunterKills}${r.hunterKills > 1 ? '，混进了路过的 AI' : ''}）`);
+    }
     judge('② 旁观端视图里被吃方已消失', r.observerPreyGone, r.observerPreyGone ? '一致' : '旁观端还看得见');
     judge('② 旁观端看到的吃球方质量与吃球方一致（±15%）',
         Math.abs(r.observerHunterMass - r.hunterMassAfter) <= r.hunterMassAfter * 0.15,
@@ -522,6 +602,18 @@ for (const d of latencies) {
         judge(`③ 每端下行 < ${BANDWIDTH_BUDGET / 1024}KB/s（${b.label}）`, b.bps < BANDWIDTH_BUDGET,
             `${(b.bps / 1024).toFixed(1)} KB/s`);
     }
+    // ④ 断线重连（M4）
+    judge('④ 断线后细胞留在宽限期内（别的端仍看得见那颗球）', r.hunterStillSees,
+        r.hunterStillSees ? '一致' : '断线即消失 = 没进宽限期');
+    judge('④ 宽限期内带令牌重连 → 认领回同一个 ownerId', r.reclaimedOwner,
+        r.reclaimedOwner ? r.rejoinOwner : '换了 ownerId（= 变成了另一个人）');
+    judge('④ 重连后细胞 cid 不变（ghost 不会被当成新球重画）', r.reclaimedCids,
+        r.reclaimedCids ? 'cid 一致' : 'cid 变了');
+    judge('④ 重连回来还能动（有活细胞）', r.rejoinAlive > 0, `${r.rejoinAlive} 颗活细胞`);
+    judge('④ 宽限期满被真正移除（旁观端视图里那颗球消失）', r.removedFromHunter,
+        r.removedFromHunter ? '一致' : '还在场上');
+    judge('④ 移除时广播了 left（对端花名册能摘掉这个名字）', r.leftBroadcast,
+        r.leftBroadcast ? '已广播' : '没收到 left');
 }
 
 const bad = verdicts.filter((v) => !v.ok);
