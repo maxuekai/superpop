@@ -54,6 +54,10 @@ function argsFor(level) {
         ['escapeFoodWeight', '0.1'],
         ['escapeFoodRange', '90'],
         ['chaseRange', String(p.chaseRange)],
+        // 绕圈拖延：三档逐位传下去。不传的话三档都会跑 AI 默认值，
+        // 报告就会在"参数配了"的前提下量出一个假的梯度——这正是本脚本
+        // 当初存在的理由（参数配了但量不出来），不能自己再犯一次。
+        ['fleeOrbit', String(p.fleeOrbit)],
     ];
     const pick = (allowed) => pairs
         .filter(([name]) => allowed(name))

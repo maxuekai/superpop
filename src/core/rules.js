@@ -259,6 +259,11 @@ export function mergeCells(cells, now) {
             // 这条路径不 clamp 就能绕过 absorb() / 吃食物 的钳制
             partner.r = capRadius(Math.sqrt(partner.mass + cell.mass));
             partner.mergeAfter = now;
+            // 合并顿挫：活下来的那颗僵一下并抖一下（Ball.update 消费这两个字段）。
+            // 按 applySplitPush 的约定，这里**直接写字段**而不是调 partner.onMerge()——
+            // core/rules.js 不能假设调用方传进来的是 Ball 子类（单测里就是普通对象）。
+            partner.mergeStun = SPLIT.mergeStunSeconds;
+            partner.mergeWobble = SPLIT.mergeStunWobble;
             merged += 1;
             continue;
         }

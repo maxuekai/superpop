@@ -258,6 +258,19 @@ export class Game {
         return { x: this.camera.xView, y: this.camera.yView, w: this.camera.wView, h: this.camera.hView };
     }
 
+    // 世界坐标 → CSS 像素。scale 是「世界单位 → CSS 像素」，所以视口左上角为原点。
+    // 鼠标操控要的就是这个换算（球在屏幕上的位置 vs 光标位置）。
+    // ⚠ 别乘 devicePixelRatio：画布内部是 dpr 倍，但事件坐标（clientX/Y）永远是 CSS 像素。
+    worldToScreen(x, y) {
+        return { x: (x - this.camera.xView) * this.scale, y: (y - this.camera.yView) * this.scale };
+    }
+
+    // 自己的球在屏幕上的位置（鼠标操控的参照点；与镜头跟随的是同一颗最大的分身）
+    ballScreen() {
+        const cell = this.largestCell();
+        return this.worldToScreen(cell.x, cell.y);
+    }
+
     // ---------- 生命周期 ----------
 
     // 从开局界面进入游戏（单机）

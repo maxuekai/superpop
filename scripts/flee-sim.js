@@ -48,6 +48,7 @@ const cli = parseArgs(process.argv.slice(2), {
         'worldW', 'worldH', 'hunterLead',
         'speedScale', 'foragePower', 'thinkInterval', 'escapeSamples', 'escapeChange', 'chaseRange',
         'fleeRange', 'escapeProbe', 'escapeWallWeight', 'escapeFoodWeight', 'escapeFoodRange',
+        'fleeOrbit', 'fleeOrbitAngle', 'fleeOrbitRange',
     ],
 });
 const flagValue = cli.flag;
@@ -64,6 +65,11 @@ if (flagValue('thinkInterval') !== undefined) AI.thinkInterval = flagValue('thin
 if (flagValue('escapeSamples') !== undefined) AI.escapeSamples = flagValue('escapeSamples');
 if (flagValue('escapeChange') !== undefined) AI.escapeChange = flagValue('escapeChange');
 if (flagValue('chaseRange') !== undefined) AI.chaseRange = flagValue('chaseRange');
+// 绕圈拖延（config.AI.fleeOrbit*）：逃的时候不一味直退，朝切向偏一个角度。
+// 三个参数一起扫才有意义——强度 × 角度决定偏多少，Range 决定从多远开始绕。
+if (flagValue('fleeOrbit') !== undefined) AI.fleeOrbit = flagValue('fleeOrbit');
+if (flagValue('fleeOrbitAngle') !== undefined) AI.fleeOrbitAngle = flagValue('fleeOrbitAngle');
+if (flagValue('fleeOrbitRange') !== undefined) AI.fleeOrbitRange = flagValue('fleeOrbitRange');
 // 下面这几个除了 flag 之外还能走位置参数。批量调参时一律用 flag，避开位置参数的坑：
 // 位置参数是「既不是 flag、也不是某个 flag 的值」的数字，所以
 // `flee-sim --thinkInterval 0.1 ... 0.1 90` 里那个 0.1 会被当成 flag 的值剔掉，
@@ -244,7 +250,7 @@ if (SWEEP) {
         console.log(`  ${p}顺手吃到的食物：${eatenFood} 颗（平均 ${(eatenFood / TRIALS).toFixed(1)} 颗/轮，escapeFoodRange=${AI.escapeFoodRange}）`);
 
         if (label === '直线') {
-            console.log(`  当前参数：fleeRange=${AI.fleeRange} borderMargin=${AI.borderMargin} escapeSamples=${AI.escapeSamples} escapeProbe=${AI.escapeProbe}`);
+            console.log(`  当前参数：fleeRange=${AI.fleeRange} borderMargin=${AI.borderMargin} escapeSamples=${AI.escapeSamples} escapeProbe=${AI.escapeProbe} fleeOrbit=${AI.fleeOrbit}`);
             const hunterSpeed = speedOf(HUNTER_R, 1);
             const preySpeed = speedOf(PREY_R, AI.speedScale);
             console.log(`  闭环速度：猎手 ${hunterSpeed.toFixed(1)} / 猎物 ${preySpeed.toFixed(1)} → 理论${hunterSpeed > preySpeed ? '追得上' : '追不上'}`);

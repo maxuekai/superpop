@@ -76,6 +76,13 @@ export class Ball {
         this.splitVx = 0;
         this.splitVy = 0;
         this.pushLeft = 0;
+        // 合并顿挫（两半粘回一个的那一下）：mergeStun 是剩余僵直时间（秒），
+        // mergeWobble 是视觉挤压幅度（比例），mergePhase 是挤压往复的相位。
+        // 由 rules.mergeCells 写入，Ball.update 消费（见 config.SPLIT.mergeStun*）。
+        // 纯表现 + 手感：质量守恒与合并阈值都不受影响。
+        this.mergeStun = 0;
+        this.mergeWobble = 0;
+        this.mergePhase = 0;
     }
 
     static nextOwnerId() {
@@ -113,6 +120,9 @@ export class Ball {
         this.splitVx = 0;
         this.splitVy = 0;
         this.pushLeft = 0;
+        this.mergeStun = 0;
+        this.mergeWobble = 0;
+        this.mergePhase = 0;
     }
 
     // 出生保护是否生效
@@ -129,10 +139,27 @@ export class Ball {
         // 这样调大调小 dt 都不会改变手感
         const step = dt * PLAYER.speedUnit;
 
-        // 越大越慢：速度分母随半径增长
+        // 更大越慢：速度分母随半径增长
         const divisor = PLAYER.speedDivisor + Math.max(0, this.r - PLAYER.radius) * PLAYER.slowdownPerRadius;
-        this.x += (this.speedX / divisor) * step;
-        this.y += (this.speedY / divisor) * step;
+
+        // 合并顿挫：黏回来的那一下走不动。折扣按「剩余僵直比例」线性回到 1，
+        // 于是恢复速度也是渐进的——一帧直接恢复会像卡了一下又猛地弹出去。
+        // 挤压幅度同样由剩余时间驱动（乘回初值），不需要另写一条衰减。
+        let throttle = 1;
+        if (this.mergeStun > 0) {
+            const k = Math.min(1, this.mergeStun / SPLIT.mergeStunSeconds);
+            throttle = 1 - (1 - SPLIT.mergeStunSlow) * k;
+            this.mergeStun = Math.max(0, this.mergeStun - dt);
+            // ⚠ 最后一帧必须直接清零，不能留 k 的残值：合并后会永远带着
+            // 一个永久的挤压变形（0.0057 这种看着无害，久了就是"球一直是椭的"）
+            this.mergeWobble = this.mergeStun > 0 ? SPLIT.mergeStunWobble * k : 0;
+            this.mergePhase += dt * SPLIT.mergeStunHz * Math.PI * 2;
+        } else if (this.mergeWobble !== 0) {
+            this.mergeWobble = 0; // 顿挫结束的那一帧把视觉量清干净，别留个尾巴
+        }
+
+        this.x += (this.speedX / divisor) * step * throttle;
+        this.y += (this.speedY / divisor) * step * throttle;
 
         // 分裂外冲：按剩余时间线性衰减到 0。
         // 必须乘 dt 而不是 step：这段位移是"世界单位/秒"，不参与速度分母与体型缩放。
@@ -207,9 +234,16 @@ export class Ball {
         const visualR = this.displayR;
         const paint = ballPaint(context, this.bColor);
 
+        // 合并顿挫的视觉挤压：mergeWobble 由 Ball.update 按剩余僵直时间给出，
+        // 这里把它变成一对相反方向的缩放 → 圆被挤成椭圆，下一帧又弹回来。
+        // 只压球体本身；名字与光环仍按正圆画（挤歪的文字比挤歪的球更难看）。
+        const wobble = this.mergeWobble > 0.001 ? Math.sin(this.mergePhase) * this.mergeWobble : 0;
+        const radiusX = visualR * (1 + wobble);
+        const radiusY = visualR * (1 - wobble);
+
         context.save();
         context.translate(this.x, this.y);
-        context.scale(visualR, visualR);
+        context.scale(radiusX, radiusY);
         context.fillStyle = paint.fill;
         context.beginPath();
         context.arc(0, 0, 1, 0, Math.PI * 2);
@@ -218,7 +252,7 @@ export class Ball {
 
         // 描边线宽先按世界口径算（含 1.5 下限），再除回单位圆坐标系
         context.strokeStyle = paint.edge;
-        context.lineWidth = Math.max(1.5, visualR * 0.06) / visualR;
+        context.lineWidth = Math.max(1.5, visualR * 0.06) / radiusX;
         context.stroke();
 
         context.beginPath();

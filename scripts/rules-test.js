@@ -2,7 +2,7 @@
 // 依赖 Ball / AiPlayer 是纯逻辑（不触碰 document），所以可以直接在 node 里跑。
 import assert from 'node:assert/strict';
 
-import { AI, COLORS, EAT, FOOD, JOYSTICK, KEYS, KING, NAMES, PLAYER, SPAWN, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
+import { AI, COLORS, EAT, FOOD, JOYSTICK, KEYS, KING, MOUSE, NAMES, PLAYER, SPAWN, SPLIT, VIEW, WORLD as WORLD_CONFIG } from '../src/config.js';
 import { AiPlayer } from '../src/core/ai.js';
 import { Ball } from '../src/core/ball.js';
 import { Camera } from '../src/core/camera.js';
@@ -32,6 +32,7 @@ import { World } from '../src/core/world.js';
 import { NetWorld } from '../src/net/client.js';
 import { Joystick } from '../src/input/joystick.js';
 import { Keyboard } from '../src/input/keyboard.js';
+import { MouseSteer } from '../src/input/mouse.js';
 
 const STEP = 1 / 60;
 // 世界尺寸从 config 导入：硬编码过 1024×768，地图放大后单测还跑在旧地图上
@@ -223,6 +224,58 @@ test('AI 被逼到墙边时不会往墙上冲（换哪一侧偏好都一样）',
     assert.ok(diagonal >= 10, `多数情况下应该斜着逃，只有 ${diagonal}/24 次`);
 });
 
+test('AI 绕圈拖延：威胁贴脸时直退（保命），拉开之后才绕', () => {
+    // 绕圈不能变成"往威胁脸上凑"。判据用「逃跑方向与逃离连线的夹角」：
+    // 贴脸时必须贴近 0°（直退），拉到 fleeRange 附近才允许出现明显夹角。
+    const world = { width: WORLD.width, height: WORLD.height };
+    const angleOf = (escapeX, escapeY, awayX, awayY) => {
+        const cross = escapeX * awayY - escapeY * awayX;
+        const dot = escapeX * awayX + escapeY * awayY;
+        return Math.abs(Math.atan2(cross, dot)); // 弧度，0 = 正对着逃离方向
+    };
+
+    let closeMax = 0;
+    for (let i = 0; i < 24; i += 1) {
+        const prey = ai(500, 500, 10);
+        const threat = ball(500 + AI.fleeOrbitNear * 0.5, 500, 40, 'boss'); // 贴脸
+        prey.think([prey, threat], []);
+        const escape = prey.escapeDirection(world, [prey, threat]);
+        const angle = angleOf(escape.dx, escape.dy, prey.x - threat.x, prey.y - threat.y);
+        closeMax = Math.max(closeMax, angle);
+    }
+    // 贴脸时偏转必须小于一个候选方向的间隔（π/8 = 22.5°），
+    // 否则就是"绕出去送死"。留一点余量给 escapeSamples 的离散化误差。
+    assert.ok(closeMax < Math.PI / 8,
+        `贴脸时不该绕（实测最大偏转 ${(closeMax * 180 / Math.PI).toFixed(1)}°）`);
+
+    // 拉开到 fleeRange 附近：应当出现明显夹角（否则 fleeOrbit 是死参数）
+    let farMax = 0;
+    for (let i = 0; i < 24; i += 1) {
+        const prey = ai(500, 500, 10);
+        const threat = ball(500 - AI.fleeRange * 0.95, 500, 40, 'boss');
+        prey.think([prey, threat], []);
+        const escape = prey.escapeDirection(world, [prey, threat]);
+        farMax = Math.max(farMax, angleOf(escape.dx, escape.dy, prey.x - threat.x, prey.y - threat.y));
+    }
+    assert.ok(farMax > Math.PI / 8,
+        `拉开后应当绕（实测最大偏转 ${(farMax * 180 / Math.PI).toFixed(1)}°，说明 fleeOrbit 没生效）`);
+});
+
+test('AI 绕圈拖延：绕不出去就不绕（墙的约束压过绕圈偏置）', () => {
+    // 这是"偏置"与"旋转"两种实现的分水岭：旋转是在惩罚项算完之后转方向，
+    // 转完可能正对着墙；偏置是让打分去挑，所以墙永远赢。
+    const world = { width: WORLD.width, height: WORLD.height };
+    const wallX = WORLD.width - 39;
+    const midY = WORLD.height / 2;
+    const threat = ball(wallX - 40, midY, 30, 'boss'); // 威胁在左 → 直退是往右墙冲
+    for (let i = 0; i < 24; i += 1) {
+        const cornered = ai(wallX, midY, 10);
+        cornered.think([cornered, threat], []);
+        cornered.steer(world, [cornered, threat]);
+        assert.ok(cornered.speedX < 20, `第 ${i} 次不该往右墙绕（speedX=${cornered.speedX.toFixed(1)}）`);
+    }
+});
+
 test('AI 贴角被围时会往内侧跑', () => {
     const world = { width: WORLD.width, height: WORLD.height };
     const cornered = ai(WORLD.width - 19, 15, 10);
@@ -235,13 +288,30 @@ test('AI 贴角被围时会往内侧跑', () => {
     }
 });
 
-test('AI 空旷处仍然直着远离威胁（不会无谓乱抖）', () => {
+test('AI 空旷处仍然干脆地远离威胁（绕圈是稳定的偏置，不是无谓乱抖）', () => {
+    // 这条原来断言 |speedY| < 15，也就是"空旷处必须是纯径向直退"。
+    // 绕圈拖延刻意引入了一个稳定的切向分量，所以判据改成：
+    // ① 主力仍然是远离威胁（speedX 足够大）；
+    // ② 切向分量有上限（不能大到变成横着跑 = 乱抖/掉头）；
+    // ③ **同一颗 AI 连续两帧的绕向一致**——真正的"乱抖"是方向逐帧翻转，
+    //    稳定偏置不管往哪边偏都不算抖。AI.escapePhase 在 think 里才会换。
+    const world = { width: WORLD.width, height: WORLD.height };
+    const full = JOYSTICK.radius * AI.speedScale;
     const prey = ai(512, 384, 10);
     const threat = ball(432, 384, 30, 'boss');
-    const world = { width: WORLD.width, height: WORLD.height };
-    prey.update(STEP, world, [prey, threat], []);
-    assert.ok(prey.speedX > 50, `应该干脆地往右跑，实际 speedX=${prey.speedX}`);
-    assert.ok(Math.abs(prey.speedY) < 15, `不该上下乱晃，实际 speedY=${prey.speedY}`);
+    prey.think([prey, threat], []);
+    prey.steer(world, [prey, threat]);
+    const firstY = prey.speedY;
+    assert.ok(prey.speedX > full * 0.8, `应该干脆地往右跑，实际 speedX=${prey.speedX}`);
+    assert.ok(Math.abs(firstY) < full * 0.35,
+        `切向分量不该大到变成横着跑（|speedY|=${firstY.toFixed(1)} / 满舵 ${full.toFixed(1)}）`);
+
+    // 不重新 think（也就是不换 escapePhase）时，绕向必须保持一致
+    for (let i = 0; i < 5; i += 1) {
+        prey.steer(world, [prey, threat]);
+        assert.ok(Math.sign(prey.speedY) === Math.sign(firstY) || Math.abs(prey.speedY) < 1e-6,
+            `不该逐帧翻转绕向：第 ${i} 帧 speedY=${prey.speedY.toFixed(1)}（首帧 ${firstY.toFixed(1)}）`);
+    }
 });
 
 test('AI 逃跑时会顺手挑附近最近的食物，超出范围就不理', () => {
@@ -959,6 +1029,65 @@ test('合并：离得远的、不同 owner 的都不合', () => {
     assert.equal(mergeCells([a, other], 100).merged, 0, '别人的球不能和我合并');
 });
 
+// ---------- 合并反馈（僵直 + 视觉顿挫） ----------
+
+test('合并反馈：合并后有短暂僵直与视觉回弹，但不碰质量守恒', () => {
+    // 合并本身什么都不做时，"两半自己糊回去了"是没有反馈的（TODO.md 的遗留项）。
+    // 这里钉住两件事：① 合并瞬间要进入僵直；② 僵直期间位移打折、之后恢复。
+    const a = makeCell(500, 500, 20, 'me');
+    const b = makeCell(500, 505, 20, 'me2');
+    const before = groupMass([a, b]);
+    const result = mergeCells([a, b], 100);
+    const survivor = result.cells[0];
+
+    assert.equal(survivor.mergeStun, SPLIT.mergeStunSeconds,
+        '合并后必须进入僵直（否则合并没有任何手感反馈）');
+    assert.ok(survivor.mergeWobble > 0, '合并后要有视觉挤压');
+    assert.ok(Math.abs(groupMass(result.cells) - before) < 1e-6, '僵直不能影响质量守恒');
+
+    // 僵直期间：满舵位移必须明显小于没僵直时
+    const world = { width: WORLD.width, height: WORLD.height };
+    survivor.speedX = JOYSTICK.radius;
+    survivor.speedY = 0;
+    const x0 = survivor.x;
+    survivor.update(STEP, world);
+    const stunnedStep = survivor.x - x0;
+    const plain = makeCell(500, 500, 20, 'plain');
+    plain.speedX = JOYSTICK.radius;
+    plain.update(STEP, world);
+    const normalStep = plain.x - 500;
+    assert.ok(stunnedStep < normalStep * SPLIT.mergeStunSlow + normalStep * 0.05,
+        `僵直期间应当减速（实际 ${stunnedStep.toFixed(2)} vs 常态 ${normalStep.toFixed(2)}）`);
+
+    // 走完僵直时长之后恢复满速（不能永久减速——那会让分身合并后一直追不上）
+    let t = 0;
+    while (survivor.mergeStun > 0 && t < 5) {
+        survivor.update(STEP, world);
+        t += STEP;
+    }
+    assert.equal(survivor.mergeStun, 0, '僵直会自然结束');
+    assert.equal(survivor.mergeWobble, 0, '视觉挤压也要收干净，不能留残值');
+    const x1 = survivor.x;
+    survivor.update(STEP, world);
+    // 对照球必须与合并后的半径相同：速度分母随半径增长，拿 r=20 的球去比
+    // 一个 √2 倍大的合并结果，比出来的差是体型差而不是僵直残留（比错过一次）
+    const plainAfter = makeCell(500, 500, survivor.r, 'plain-after');
+    plainAfter.speedX = JOYSTICK.radius;
+    plainAfter.update(STEP, world);
+    assert.ok(Math.abs((survivor.x - x1) - (plainAfter.x - 500)) < 1e-6,
+        `僵直结束后位移回到常态（实际 ${(survivor.x - x1).toFixed(4)} vs ${(plainAfter.x - 500).toFixed(4)}）`);
+});
+
+test('合并反馈：重生/复位会清掉僵直（不能带着上一局的减速复活）', () => {
+    const a = makeCell(500, 500, 20, 'me');
+    const b = makeCell(500, 503, 20, 'me2');
+    const survivor = mergeCells([a, b], 100).cells[0];
+    assert.ok(survivor.mergeStun > 0);
+    survivor.reset(600, 600, 20);
+    assert.equal(survivor.mergeStun, 0, 'reset 后不该还有僵直');
+    assert.equal(survivor.mergeWobble, 0);
+});
+
 // ---------- 浮动摇杆（touch） ----------
 
 function touchEvent(type, id, x, y, changedOnly = true) {
@@ -1442,6 +1571,89 @@ test('出生点在视口外：避免 AI 在玩家眼前凭空闪现', () => {
     assert.equal(isOutsideView({ x: 0, y: 0 }, { x: 0, y: 0, w: 0, h: 0 }, margin), true);
 });
 
+// ---------- 桌面鼠标（pointer） ----------
+
+function pointerEvent(type, x, y, pointerType = 'mouse') {
+    return { type, clientX: x, clientY: y, pointerType };
+}
+
+function fakeMouse(input, options = {}) {
+    const canvas = fakeTarget();
+    const ball = options.ball || { x: 400, y: 300 };
+    const mouse = new MouseSteer(canvas, input, {
+        getBallScreen: () => ball,
+        isBlocked: options.isBlocked || (() => false),
+        isEnabled: options.isEnabled || (() => true),
+    });
+    mouse.enable();
+    return { mouse, canvas, ball };
+}
+
+test('鼠标：光标方向写进 input，力度等于摇杆满舵', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { canvas } = fakeMouse(input); // 球在 (400,300)
+    canvas.fire('pointermove', pointerEvent('pointermove', 600, 300));
+    assert.ok(input.speedX > 0, '光标在右边 → 向右');
+    assert.equal(input.speedY, 0);
+    // 力度必须与摇杆/键盘同一个口径，否则桌面比手机快（或慢）
+    assert.ok(Math.abs(Math.hypot(input.speedX, input.speedY) - MOUSE.power) < 1e-9, '力度等于满舵');
+    assert.equal(MOUSE.power, JOYSTICK.radius, '鼠标与摇杆共用同一个力度常量');
+
+    // 斜着也一样是满舵（不能因为斜向就慢一截）
+    canvas.fire('pointermove', pointerEvent('pointermove', 700, 500));
+    assert.ok(Math.abs(Math.hypot(input.speedX, input.speedY) - MOUSE.power) < 1e-9, '斜向也是满舵');
+
+    // 光标离球 20 像素和 300 像素，力度一样（鼠标给的是方向，不是位移）。
+    // ⚠ 不能拿 1 像素来验证"距离不影响力度"——那在死区里，本就该不动球。
+    canvas.fire('pointermove', pointerEvent('pointermove', 420, 300));
+    assert.ok(Math.abs(Math.hypot(input.speedX, input.speedY) - MOUSE.power) < 1e-9, '距离不影响力度');
+});
+
+test('鼠标：死区内不动球、离开画布与窗口失焦都清零', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { canvas, mouse } = fakeMouse(input);
+    canvas.fire('pointermove', pointerEvent('pointermove', 402, 301)); // 距球 (400,300) 约 2px
+    assert.equal(input.speedX, 0, '光标压在球上不该让球抖');
+    assert.equal(input.speedY, 0);
+
+    canvas.fire('pointermove', pointerEvent('pointermove', 600, 300));
+    assert.ok(input.speedX > 0);
+    canvas.fire('pointerleave', pointerEvent('pointerleave', 0, 0));
+    assert.equal(input.speedX, 0, '指针离开画布后清零（否则球一直朝那个方向走）');
+    assert.equal(mouse.isActive, false);
+
+    // 失焦同理：光标不动但窗口切走了，上一帧方向还留在 input 里
+    canvas.fire('pointermove', pointerEvent('pointermove', 600, 300));
+    canvas.fire('blur', pointerEvent('blur', 0, 0));
+    assert.equal(input.speedX, 0, '窗口失焦要清零');
+});
+
+test('鼠标：手指在摇杆上时不接管；菜单/结算期间也不接管', () => {
+    const input = { speedX: 0, speedY: 0 };
+    let blocked = false;
+    let enabled = true;
+    const { canvas } = fakeMouse(input, { isBlocked: () => blocked, isEnabled: () => enabled });
+    canvas.fire('pointermove', pointerEvent('pointermove', 600, 300));
+    assert.ok(input.speedX > 0);
+
+    blocked = true; // 手指开始拖摇杆
+    canvas.fire('pointermove', pointerEvent('pointermove', 700, 300));
+    assert.equal(input.speedX, 0, '摇杆操控中鼠标要让位（触屏上的合成 mouse 事件会乱拽）');
+
+    blocked = false;
+    enabled = false; // 回到菜单
+    canvas.fire('pointermove', pointerEvent('pointermove', 700, 300));
+    assert.equal(input.speedX, 0, '不在局内不接管');
+});
+
+test('鼠标：触屏指针事件不参与（合成 mouse 事件不该操控）', () => {
+    const input = { speedX: 0, speedY: 0 };
+    const { canvas } = fakeMouse(input);
+    canvas.fire('pointermove', pointerEvent('pointermove', 600, 300, 'touch'));
+    assert.equal(input.speedX, 0, 'touch 指针不写 input');
+    assert.equal(input.speedY, 0);
+});
+
 // ---------- 出生保护 ----------
 
 test('出生保护：保护期内 isProtected 为真，到期后失效', () => {
@@ -1582,8 +1794,12 @@ test('World：removeGroup 摘除整组（联机断线清理）', () => {
 test('World：重生/进场稀疏选点——在唯一的安全区里落子（真机反馈"重生在少人的地方"）', () => {
     const world = new World();
     world.addGroup('p', '测');
-    // 用 r=50 的球铺满世界左侧 3/4（间距 88 < 2r，中间无处可插），只留右侧 x>1000 空旷
-    for (let gx = 150; gx <= 950; gx += 88) {
+    // 用 r=50 的球铺满世界左侧（间距 88 < 2r，中间无处可插），只留右侧空旷区。
+    // ⚠ 空旷区要留得**够宽**（这里约 42% 的可落子范围）：safeSpawnPosition 最多试 60 次，
+    // 断言"每次都落在空旷区"等于要求"60 次随机至少命中一次"。空旷区只有 16% 宽时，
+    // 整轮试完一次都没命中的概率约 1/40000——rules-test 没有固定随机种子，
+    // 迟早有一轮挂在那里，而挂的时候看起来像"选点坏了"（这次就是这么撞上的）。
+    for (let gx = 150; gx <= 650; gx += 88) {
         for (let gy = 150; gy <= 1150; gy += 88) {
             world.balls.push(new Ball(gx, gy, 50, '#fff', '障碍', `block-${gx}-${gy}`));
         }
@@ -1591,7 +1807,7 @@ test('World：重生/进场稀疏选点——在唯一的安全区里落子（�
     // 稀疏选点多次，必须全部落在右侧空旷区（离最近球的边缘最远的地方只剩那里）
     for (let i = 0; i < 12; i += 1) {
         const pos = world.safeSpawnPosition(PLAYER.radius, SPAWN.edgeGap, false, true);
-        assert.ok(pos.x > 1000,
+        assert.ok(pos.x > 700,
             `稀疏选点该避开球堆落在空旷区，第 ${i} 次实际 (${Math.round(pos.x)},${Math.round(pos.y)})`);
     }
 });

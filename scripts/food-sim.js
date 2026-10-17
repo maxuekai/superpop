@@ -25,6 +25,7 @@ const cli = parseArgs(process.argv.slice(2), {
         'divisor', 'slowdown', 'playerGain', 'foodGain', 'trials',
         'thinkInterval', 'chaseRange', 'escapeFoodRange', 'fleeRange', 'escapeProbe',
         'escapeChange', 'escapeSamples', 'speedScale', 'foragePower',
+        'fleeOrbit', 'fleeOrbitAngle', 'fleeOrbitRange',
     ],
 });
 const flagValue = cli.flag;
@@ -44,6 +45,12 @@ if (flagValue('speedScale') !== undefined) AI.speedScale = flagValue('speedScale
 // AI 觅食时还有一层额外减速（config.AI.foragePower，原为硬编码 0.95），
 // 和 speedScale 叠起来是 0.874 倍满舵——比玩家慢 12.6%。--foragePower=1 可以关掉它。
 if (flagValue('foragePower') !== undefined) AI.foragePower = flagValue('foragePower');
+// 绕圈拖延：觅食仿真里玩家球与 AI 球的体型会拉开，AI 偶尔会触发逃跑分支，
+// 所以这三个 flag 也要认（difficulty-report 会对两个脚本发同一组参数，
+// 不认就会整行报错、表格里只剩 "?"）。多数轮次里不会触发，是为了让口径显式。
+if (flagValue('fleeOrbit') !== undefined) AI.fleeOrbit = flagValue('fleeOrbit');
+if (flagValue('fleeOrbitAngle') !== undefined) AI.fleeOrbitAngle = flagValue('fleeOrbitAngle');
+if (flagValue('fleeOrbitRange') !== undefined) AI.fleeOrbitRange = flagValue('fleeOrbitRange');
 
 // 与 Ball.update 同一套公式
 function speedOf(r) {

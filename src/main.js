@@ -5,6 +5,7 @@ import { mountLogPanel, startLogPanelTicker } from './core/log-panel.js';
 import { wheelZoomFactor } from './core/utils.js';
 import { Joystick } from './input/joystick.js';
 import { Keyboard } from './input/keyboard.js';
+import { MouseSteer } from './input/mouse.js';
 import { Hud } from './ui/hud.js';
 
 window.addEventListener('load', () => {
@@ -49,6 +50,16 @@ window.addEventListener('load', () => {
     });
     keyboard.enable();
 
+    // 桌面鼠标：球朝光标方向走（不用按住）。监听画布而不是 document——
+    // HUD 面板浮在画布上方，指针停在面板上时画布收不到事件，球自然不动。
+    // 手指在摇杆上操控时鼠标让位；菜单/结算弹层期间也不接管。
+    const mouse = new MouseSteer(canvas, game.input, {
+        getBallScreen: () => game.ballScreen(),
+        isBlocked: () => joystick.isActive,
+        isEnabled: () => game.state === 'playing' || game.state === 'dying',
+    });
+    mouse.enable();
+
     // 桌面滚轮也是视野缩放（一格约 ×0.88）。Ctrl+滚轮留给浏览器的页面缩放，不抢；
     // passive: false 才能 preventDefault 掉页面滚动
     canvas.addEventListener('wheel', (e) => {
@@ -75,6 +86,10 @@ window.addEventListener('load', () => {
             await session.join({
                 name,
                 viewport: { w: game.cssWidth, h: game.cssHeight },
+                // 上次留下的认领令牌：刷新页面/被系统回收后再进来，还能要回同一颗球
+                // （服务端宽限期内认领原细胞，见 server/index.js）。令牌失效时
+                // 服务端当新玩家处理，这里不用特殊分支。
+                token: NetSession.savedToken(),
             });
             game.attachNet(session);
             game.beginOnline();

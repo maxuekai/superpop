@@ -97,6 +97,19 @@ export const SPLIT = {
     // 速度线性衰减到 0，单侧总位移 ≈ pushSpeed × pushTime / 2。
     pushSpeed: 120, // 世界单位/秒（会按体型缩放）
     pushTime: 0.3, // 秒
+
+    // 合并反馈（两个分身粘回一个的那一下）。分裂有外冲、有冷却文案，合并却什么都不发生，
+    // 玩家会觉得"两半自己糊回去了，不像合并"。原作里合并有一记顿挫，这里补上：
+    //   mergeStunSeconds  顿挫持续（秒）。期间按 mergeStunSlow 打折位移（僵直）。
+    //   mergeStunSlow     顿挫刚发生时位移的比例（1 = 不减速）。取 0.5 而不是 0：
+    //                      真僵住的话玩家会觉得卡，0.5 是"被拽了一下"的量级。
+    //   mergeStunWobble   视觉挤压幅度（比例，作用在 displayR 上，0.12 ≈ 一挤一弹）。
+    //   mergeStunHz       挤压往复频率（次/秒）。纯表现，不进任何判定。
+    // 纯视觉 + 手感，不影响质量守恒与合并阈值；由 rules.mergeCells 写入、Ball.update 消费。
+    mergeStunSeconds: 0.28,
+    mergeStunSlow: 0.5,
+    mergeStunWobble: 0.12,
+    mergeStunHz: 9,
 };
 
 // 键盘/按钮都能触发的动作键
@@ -182,11 +195,13 @@ export const DIFFICULTY = {
         foodGain: 0.26,
         minCount: 5,
         count: 9,
+        // easy 不绕：直退是最好懂的走位，也最容易被玩家读出来按住追
+        fleeOrbit: 0,
     },
     normal: {
         label: '普通',
         // ⚠ 这一档必须与 AI.* 的默认值**逐项相同**（fleeRange 160 / thinkInterval 0.1 /
-        //    escapeSamples 16 / escapeProbe 180 / escapeChange 0.25）。
+        //    escapeSamples 16 / escapeProbe 180 / escapeChange 0.25 / fleeOrbit 0.4）。
         //    它是默认档和历史验收锚点，difficulty-report 会拿"不带 flag 的 flee-sim"
         //    当参照逐位比对，漂了就报出来。
         fleeRange: 160,
@@ -199,6 +214,7 @@ export const DIFFICULTY = {
         foodGain: 0.3,
         minCount: 6,
         count: 12,
+        fleeOrbit: 0.4,
     },
     hard: {
         label: '困难',
@@ -217,6 +233,8 @@ export const DIFFICULTY = {
         foodGain: 0.34,
         minCount: 7,
         count: 14,
+        // 绕得比 normal 更狠（配合更小的 fleeRange：晚逃 + 敢绕）
+        fleeOrbit: 0.65,
     },
 };
 
@@ -280,6 +298,26 @@ export const AI = {
     // 保证「为了吃一口把自己送回危险里」不会发生。
     // 0.25 会把被逼墙比例从 1.3% 拉到 8.7%，0.1 是实测平衡点（见 npm run sim）
     escapeFoodWeight: 0.1,
+    // 绕圈拖延：逃跑方向不只「纯径向直退」，还在打分里给**切向**（垂直于逃离连线）
+    // 加一个偏置，于是 AI 会挑斜着跑的那个候选——猎手瞄「位置 + 速度×提前量」时，
+    // 直退正好把提前量用满、贴上来的球几乎必被吃到；绕开一点，猎手的追踪路径
+    // 与猎物实际路径之间恒定差一个身位。
+    // 为什么是「打分偏置」而不是「把选出来的方向旋转」：旋转发生在墙与撞球的
+    // 惩罚项算完之后，转完可能正对着墙——实测偏转强度 ≥0.65 时被逼墙比例从
+    // 0.9% 飙到 4~5%，而"被逼墙角"正是 AI 被抓的主要原因之一。偏置让**打分**去挑，
+    // 墙的约束一直在，绕不出去就不绕（见 ai.js escapeDirection 里的注释）。
+    // 三个参数：
+    //   fleeOrbit        强度 0~1（0 = 现状直退）。偏置 = 强度 × fleeOrbitReach
+    //   fleeOrbitReach   用满时的偏置（世界单位）。相邻候选方向的弦长
+    //                    = 2 × escapeProbe × sin(π/escapeSamples)，16 样本时约 70，
+    //                    偏置与它同量级才既选得出来、又压不过「离威胁更远」
+    //   fleeOrbitNear    威胁近到多少以内不绕（贴脸保命）。⚠ 闸门在 fleeOrbitNear
+    //                    与 fleeRange 之间插值，**fleeOrbitNear 必须小于 fleeRange**，
+    //                    否则闸门打不满、fleeOrbit 变成死参数（踩过一次）。
+    // 数值是 flee-sim / difficulty-report 扫出来的，改任一项都要重跑那两个脚本。
+    fleeOrbit: 0.4,
+    fleeOrbitReach: 70,
+    fleeOrbitNear: 60,
     // 追击时瞄猎物前方 chaseLead 秒后的位置（0 = 只追当前坐标）
     chaseLead: 0.25,
     // 追击更小球 / 逃离更大球的判定距离（世界单位）
@@ -305,6 +343,18 @@ export const JOYSTICK = {
     deadZone: 5,
 };
 
+// 桌面鼠标操控：球朝光标方向走（不用按住），单位与摇杆完全一致。
+// 为什么鼠标要的是「方向」而不是「位移」：光标到球的像素距离和操控力度无关，
+// 玩家只是把鼠标甩到想去的方向；按位移算的话，远处的光标会给出满舵、
+// 近处几乎不动（鼠标常常就停在球边上），手感完全不对。
+// deadZone 是 CSS 像素：光标压在球上（差几像素）时不该让球抖。
+// power 复用 JOYSTICK.radius —— 输入层统一用「摇杆像素量」这个口径，
+// 速度分母才与触屏/键盘一致（改这里会同时改三种输入的手感，别单独调）。
+export const MOUSE = {
+    deadZone: 8,
+    power: JOYSTICK.radius,
+};
+
 // 键盘操作：WASD / 方向键。和摇杆一样把「摇杆像素量」写进 player.speedX/speedY，
 // 所以键盘与触屏共用同一套速度分母和手感曲线。
 export const KEYS = {
@@ -324,6 +374,20 @@ export const KEYS = {
 
 // 玩家所属分组 id：同一 owner 的细胞之间不能互吃，排行榜按整组合计质量
 export const PLAYER_OWNER = 'player';
+
+// 联机断线重连（服务端宽限期，见 server/index.js）：
+// 断线后细胞留在场上、不再被操控，graceSeconds 内用 resumeToken 重连可**认领原细胞**
+// （ownerId 与 cid 都不变，客户端 ghost 不会瞬移）。超期才真正移除。
+// 手机上锁屏、切 Wi-Fi、电梯里都会断一下就回来，默认 10s；宽限期内那颗球是真的
+// 站着不动（能被 AI 吃掉），这是「回来了发现球没了」与「白掉一颗球」的取舍。
+export const NET = {
+    graceSeconds: 10,
+    // 客户端重连退避：首拍等待 / 每次放大倍数 / 重试上限（服务端宽限期 + 余量）
+    reconnectDelayMs: 400,
+    reconnectBackoff: 1.6,
+    reconnectMaxDelayMs: 2500,
+    reconnectTries: 8,
+};
 
 // 出生点：距世界边缘至少留这么远，保证相机能把球放在屏幕中间
 export const SPAWN = { edgeGap: 90 };
