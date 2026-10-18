@@ -169,7 +169,7 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   （屏内食物数 = λ × 视口面积）。竖屏手机的视野上限由**世界高度**决定，世界越高缩放区间越长。
 - **相机钳制**：视口大于世界时 `Camera.clampView` 必须**居中**，不能贴左上角——旧的"左边超出→贴左"
   和"右边超出→贴右"两条规则会互相打架，`xView` 在负坐标和 0 之间横跳、球偏在屏幕一侧。
-  `VIEW.maxZoomOut`(1.3) 靠这个居中行为才成立。
+  `VIEW.maxZoomOut`(1.6) 靠这个居中行为才成立。
 - **改 WORLD 前必须扫三个指标**：`npm run sim -- --worldW X --worldH Y`（追击难度，地图越大 AI 越抓不到）、
   `npm run sim:food -- --trials 8`（AI/玩家平衡 + 屏内食物数）、`node scripts/zoom-report.mjs --scan`
   （缩放区间）。三者互相拉扯。想延长单局请调 `KING.mass`，不要继续放大地图。
