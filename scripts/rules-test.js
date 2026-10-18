@@ -755,7 +755,7 @@ test('称王：质量够 + 当前第一才算称王（只看质量会被小号�
     assert.equal(isCrowned(KING.mass, [small, big]), true, '够大且领先 → 称王');
     // 名次只看"有没有人比我重"，与数组顺序无关
     assert.equal(isCrowned(KING.mass, [big, small]), true, '顺序不影响名次');
-    const overlord = ball(0, 0, 200, '霸主');      // 40000kg > 30000
+    const overlord = ball(0, 0, Math.sqrt(KING.mass) + 10, '霸主'); // 比称王门槛更重
     assert.equal(isCrowned(KING.mass, [overlord]), false, '有更大的 AI 在 → 不算第一');
     assert.equal(isCrowned(KING.mass, [small]), true, '场上没别人了 → 第一');
     // 分身也算数：整组质量达标就算
