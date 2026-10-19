@@ -228,8 +228,18 @@ export PATH="$(ls -d "$APPDATA"/fnm/node-versions/*/installation | sort -V | tai
   死亡保留下来，而 `syncAiCount` 只在"数量超编"时踢人——6 个 AI / 目标 6 个时一个都不踢。
   于是玩家重生回 100kg 时，场上每个球都吃得掉它、它吃不掉任何一个，实测连试 8 次只活
   3/5/7/7/5/6/4/8 秒。「再来一局」在玩家看来必须是新的一局。体检：`node scripts/respawn-check.mjs`。
-- **AI 决策**：逃离更大的球 > 追击更小的球 > 觅食 > 游走；逃跑方向从多个候选方向打分挑最优
+- **AI 决策**：逃离更大的球 > 追击更小的球 > 分裂捕猎 > 觅食 > 游走；逃跑方向从多个候选方向打分挑最优
   （离威胁远 + 不贴墙 + 不撞球 + 顺手吃路边食物 + **绕圈偏置**），不是沿直线跑（那会被逼到墙角撞死）。
+  **AI 是「实体」不是单球**：主脑（`AiPlayer.leader === null`）独占 think/steer，分裂分身
+  镜像主脑输入（同 ownerId，与玩家组同构）；数量平衡/排行榜/名次/称王全部按实体聚合
+  （`World.aiEntities()`），分身不单独计数。死亡三种结局：死分身→直接移出；
+  死主脑→分身递补（分裂冷却延续）；全灭→**只排一次重生**（同帧多颗细胞只留一个载体）。
+  分裂执行在 `World.aiTrySplit`（与玩家同一套 `rules.splitStatus`，上限换 `AI.maxCells`），
+  掷骰必须走 `AiPlayer.splitRoll()`（独立 LCG）——**别抽 `Math.random`**：两个仿真靠
+  固定种子的 Math.random 保证可复现，think() 多抽一次基线整体漂移（实测踩过，
+  被吃率 14/20→11/20、难度梯度移位）。
+  开局界面的「AI 分裂」开关 = `world.aiSplit`（默认开）：**玩家偏好，绝不进 config.js**——
+  进 config 会被算进联机 configHash，单机偏好会让自己 join 时被哈希比对拒绝。
 - **绕圈拖延（`AI.fleeOrbit*`）必须落在 `fleeRange` 之内**：偏置的闸门是
   `fleeOrbitNear → fleeRange` 插值，`fleeOrbitNear` 一旦 ≥ `fleeRange`，AI 根本不会逃到那么远，
   闸门永远打不满、`fleeOrbit` 就成了**死参数**（第一版就是这么写的：240 vs 160，

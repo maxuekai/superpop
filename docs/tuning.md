@@ -628,7 +628,57 @@ AI 开始横向浪费速度。
 
 `DIFFICULTY.*.count`（5/9、6/12、7/14）的梯度没有自动化度量——food-sim 与 flee-sim 都只跑单个球。
 改它只能靠真机体感。hard 的 `chaseRange`/`chaseLead`（AI 主动压宝）同理，
-它在 flee-sim 里是死参数（本 sim 的猎物只逃不追）。
+它在 flee-sim 里是死参数（本 sim 的猎物只逃不追）。`splitChance`（AI 分裂，见下节）同理。
+
+## AI 分裂捕猎（agar.io 式）
+
+2026-10-20 落地：AI 不再只有玩家能分裂。**追击时猎物落在「普通臂展够不着、分裂够得着」
+的窗口里**（几何判定在 `rules.aiSplitWindow`），按 `AI.splitChance` 请求分裂，
+两半朝**猎物轴**甩开（World 传垂直向量给 `splitCells`，靠猎物那半相当于扑出去——
+玩家分裂是垂直于移动方向，纯手感差异）。
+
+**实体模型**（改动最大的一块）：一个 AI = 主脑 + 若干分身（`AiPlayer.leader` 指针 +
+共享 `ownerId`）。只有主脑跑 think/steer，分身每帧镜像主脑的输入向量
+（与玩家组"一个 input 喂所有分身"同构）。死亡结算三种结局：
+
+- 只死分身、实体还在 → 死细胞直接移出（不排队重生——重生的是实体不是细胞）；
+- 主脑死、分身还在 → 分身递补成主脑（`lastSplitAt` 冷却不丢，`thinkTimer=0` 立刻重决策）；
+- 全灭 → 只排**一次**重生（同帧多颗细胞被吃也只留一个载体，否则重生翻倍）。
+
+数量平衡（`syncAiCount`）、排行榜、名次、称王判定的口径全部换成**实体**
+（`World.aiEntities()` 按 ownerId 聚合），否则一个分裂的 AI 会占两行名次、
+被超编机制误踢。联机零协议改动：快照元组早已带 `ownerId+cid`（v2 埋的伏笔，
+`protocol.js` 注释里写过"将来 AI 会分裂时这里不用再改一次"）。
+
+**参数**（config.AI）：`splitChance: 0.25`（easy 0 = 不分 / hard 0.5）、
+`maxCells: 4`（玩家是 `SPLIT.maxCells=8`；AI 取小——12 个 AI × 8 细胞会把
+碰撞列表和联机快照都翻倍）。冷却复用 `SPLIT.cooldown`(8s)。
+三档的梯度没有自动化度量（World 层行为，两个单球仿真量不到）——normal=默认值
+的锚点由 `invariants.js` 断言钉住，手感只能靠真机对局。
+**开局界面有「AI 分裂」开关**（默认开，关掉 = `world.aiSplit=false`，aiTrySplit
+直接拒绝）。它是玩家偏好、**故意不进 config.js**——进 config 会被算进联机的
+configHash，单机玩过的偏好会让自己 join 时被两端哈希比对拒绝。
+
+**实测**（`scripts/_tmp-ai-split-soak.js`，本地一次性脚本、未入库——`.gitignore` 约定
+`scripts/_tmp-*` 是 throwaway；固定种子跑真实 World，玩家=直奔食物的傻瓜输入）：
+
+| 指标 | 300s 浸泡 |
+|---|---|
+| 分裂次数 | 62（约每实体每 58s 一次） |
+| 分裂后 3s 内猎物死亡 | 55/62（粗口径，含别人吃的） |
+| 细胞数峰值 | 20（10 实体 × 2，无失控） |
+| 玩家被吃 | 0 次（下限玩家也没被分裂扑死） |
+
+回归对照（全绿）：flee-sim **逐位回到基线**（14/20、贴墙 0.4%）、food-sim 0.867 锚点不动、
+difficulty-report 三档数字与改动前**完全相同**、respawn-check 8/8 活满 60s、
+net-sim 80/150ms 两档全过。
+
+**踩过的坑（别退回去）**：splitChance 的掷骰**不能抽 `Math.random`**——flee-sim /
+food-sim 靠固定种子的 Math.random 保证可复现，think() 里多抽一次就让被吃率从
+14/20 漂到 11/20、难度梯度整体移位（实测踩过，验收当场挂）。
+现在用 `AiPlayer.splitRoll()`（独立 LCG，种子=cid）。给 AI 加任何"随机行为"都走这条。
+
+**真机待验**：被 AI 突然扑死的频率（splitChance 高低的体感）、hard 档 0.5 是否过凶。
 
 ## AI 之间会不会互吃
 
