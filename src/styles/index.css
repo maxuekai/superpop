@@ -329,6 +329,25 @@ body {
     display: none; /* 联机不收难度参数，整行藏起来（.difficulty 自带 display:flex，得同权重压掉） */
 }
 
+/* AI 分裂开关：与难度行同款的横排按钮，前面带一个小标签。
+   联机同样藏起（服务端权威，客户端偏好带不过去） */
+.ai-split-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+}
+
+.ai-split-row.hidden {
+    display: none;
+}
+
+.ai-split-row .row-label {
+    font-size: 13px;
+    color: #8fb8ae;
+    white-space: nowrap;
+}
+
 .dialog {
     width: 100%;
     max-width: 320px;

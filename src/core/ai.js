@@ -1,10 +1,16 @@
-import { AI, JOYSTICK } from '../config.js';
+import { AI, JOYSTICK, SPLIT } from '../config.js';
 import { Ball } from './ball.js';
+import { aiSplitWindow } from './rules.js';
 import { clamp, distance, distanceSq, randomFloat } from './utils.js';
 
 // AI 小球：继承 Ball，只加一层「决策」。
-// 决策优先级：逃离更大的球 > 追击更小的球（含玩家）> 觅食 > 随机游走。
+// 决策优先级：逃离更大的球 > 追击更小的球（含玩家）> 分裂捕猎 > 觅食 > 随机游走。
 // 决策按 AI.thinkInterval 重新挑选目标（避免每帧抖动），转向每帧计算。
+//
+// 分裂后的 AI 是一个「实体」= 主脑 + 若干分身（同 ownerId）：
+// 只有主脑（this.leader === null）运行 think/steer，分身每帧镜像主脑的输入向量
+// （Ball.update 按各自身型换算速度）——与玩家组「一个 input 喂所有分身」同构。
+// 分身不独立决策：两个脑会互相拉扯（一个要逃一个要追），队形立刻散架。
 export class AiPlayer extends Ball {
     constructor(x, y, r, bColor, name) {
         super(x, y, r, bColor, name);
@@ -20,21 +26,50 @@ export class AiPlayer extends Ball {
         this.escapeFood = null;
         // 逃跑方向偏好：每个 AI 一份，让它们的走位各不相同
         this.escapePhase = randomFloat(0, Math.PI * 2);
+        // 分裂实体：null = 主脑；否则指向主脑（本细胞是分身，镜像它的输入）。
+        // ownerId 全实体共享（构造时 Ball 已给每个 AI 唯一 ownerId，分身沿用主脑的）。
+        this.leader = null;
+        // 实体级分裂冷却（世界时间，秒）：主脑权威，分身抄一份——
+        // 主脑被吃、分身递补时冷却不丢（继承死主脑的值）
+        this.lastSplitAt = -Infinity;
+        // 本思考周期请求分裂捕猎（World 消费后清零；执行把关在 World.aiTrySplit）
+        this.splitWish = false;
+        // 分裂掷骰的独立随机源（LCG）：flee-sim / food-sim 拿 Math.random 当
+        // 固定种子的可复现随机流，think() 里多抽一次就会让历史基线（被吃率、
+        // 难度梯度）整体漂移——参数没动、数字全变，报告没法纵向比。
+        // 种子取 cid：进程内唯一、重生换新 → 每颗 AI 每局有独立且确定的骰子。
+        this.rngState = (this.cid * 2654435761 + 1) % 2147483648;
     }
 
-    update(dt, world, balls, foodList) {
-        this.thinkTimer -= dt;
-        this.wanderTimer -= dt;
-        if (this.thinkTimer <= 0) {
-            this.thinkTimer = AI.thinkInterval;
-            this.think(balls, foodList);
+    // 独立骰子（见 rngState 注释）：返回 [0,1)
+    splitRoll() {
+        this.rngState = (this.rngState * 1103515245 + 12345) % 2147483648;
+        return this.rngState / 2147483648;
+    }
+
+    update(dt, world, balls, foodList, now = 0) {
+        if (this.leader) {
+            // 分身：镜像主脑（先主脑后分身的更新顺序由 World 保证）。
+            // 主脑刚被吃、本帧还没递补时保留上一帧输入，eatBalls 会立即提拔新主脑。
+            if (this.leader.alive) {
+                this.speedX = this.leader.speedX;
+                this.speedY = this.leader.speedY;
+            }
+        } else {
+            this.thinkTimer -= dt;
+            this.wanderTimer -= dt;
+            if (this.thinkTimer <= 0) {
+                this.thinkTimer = AI.thinkInterval;
+                this.think(balls, foodList, now);
+            }
+            this.steer(world, balls);
         }
-        this.steer(world, balls);
         super.update(dt, world);
     }
 
     // 挑目标：最近的威胁 / 最近的猎物 / 最近的食物
-    think(balls, foodList) {
+    // now = 世界时间（秒）：分裂捕猎要查猎物出生保护（aiSplitWindow）
+    think(balls, foodList, now = 0) {
         // 别的 AI 已经盯上的目标就不抢：不这么做的话一堆 AI 会同时奔向同一个球
         // 或同一颗食物，走成一条线（玩家看着就像"AI 不闪避"）
         const claimedBalls = new Set();
@@ -96,6 +131,7 @@ export class AiPlayer extends Ball {
         // 已回退——没测出收益的复杂度不要留着。
 
         // 有威胁先跑，命重要
+        this.splitWish = false;
         if (threat) {
             if (threat !== this.targetBall || Math.random() < AI.escapeChange) {
                 // 换目标或按概率换一套方向偏好：贴着墙时就能临时改走另一侧
@@ -115,6 +151,15 @@ export class AiPlayer extends Ball {
             this.targetFood = null;
             this.fleeing = false;
             this.escapeFood = null;
+            // 分裂捕猎：猎物在「普通臂展够不着、分裂够得着」的窗口里（几何判定在
+            // rules.aiSplitWindow），按 splitChance 请求分裂。冷却也在这里挡一道：
+            // 窗口期每个思考周期都会评估，不给冷却门会每周期都白掷骰子。
+            // 掷骰用 splitRoll（独立 LCG），不占 Math.random 的流——那两位仿真
+            // 靠固定种子的 Math.random 保证可复现，不能为了 AI 私心抽它的水。
+            this.splitWish = AI.splitChance > 0
+                && now - this.lastSplitAt >= SPLIT.cooldown
+                && aiSplitWindow(this, prey, now).ok
+                && this.splitRoll() < AI.splitChance;
             return;
         }
 
@@ -234,7 +279,9 @@ export class AiPlayer extends Ball {
         let sx = 0;
         let sy = 0;
         for (const other of balls) {
-            if (other === this || other === ignore || !other.alive) {
+            // 同实体（主脑/分身）不互避：否则分裂出的两半会被永久推开、永远合并不回去。
+            // 玩家分身没有这层问题——它们不跑 steer，速度全来自共享输入。
+            if (other === this || other === ignore || !other.alive || other.ownerId === this.ownerId) {
                 continue;
             }
             const d = distance(this.x, this.y, other.x, other.y);

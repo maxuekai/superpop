@@ -48,6 +48,11 @@ export class World {
         // 提成可选依赖而不是参数，是为了让 update() 的调用方不用每帧传一堆东西。
         this.getViewRect = options.getViewRect || null;
         this.onEvent = options.onEvent || (() => {});
+        // AI 分裂总开关（开局界面的「AI 分裂」开关）：默认开。
+        // ⚠ 这是玩家偏好、**不是 config 数值**——进 config.js 会被算进 configHash，
+        // 单机玩过的偏好会让联机 join 时两端哈希不一致、被自己人拒绝。
+        // 联机服务端不传这个参数，恒为开。
+        this.aiSplit = options.aiSplit !== false;
         this.syncTimer = 0;
         // roster 变更标记（AI 出生/重生改名/超编移除、玩家改名）：联机服务端读完清掉，
         // 随下一快照周期广播一次 roster。纯逻辑层只管置位，不碰网络。
@@ -383,27 +388,38 @@ export class World {
     }
 
     syncAiCount() {
-        const alive = this.ai.filter((ai) => ai.alive);
+        // 数量口径是「实体」不是「细胞」：分裂分身不算新 AI，
+        // 否则一个刚分裂的 AI 会被当成两个对手、超编机制马上踢人。
+        const alive = this.ai.filter((ai) => ai.alive && !ai.leader);
         const target = this.targetAiCount();
 
-        // 不足就补（补到 AI.count 为上限）
+        // 不足就补（补到 AI.count 为上限）。上限口径也是实体：数主脑
+        // （含等重生的），分身不占名额——否则「6 个实体各分 4 颗 = 24 细胞」
+        // 会把补给卡死，场上实体永远补不齐。
+        let total = this.ai.filter((ai) => !ai.leader).length;
         let missing = target - alive.length;
-        while (missing > 0 && this.ai.length < AI.count) {
+        while (missing > 0 && total < AI.count) {
             this.spawnAi(1);
+            total += 1;
             missing -= 1;
         }
 
-        // 超编就悄悄收掉最大的那几个（永久移除，不再重生）
+        // 超编就悄悄收掉最大的那几个实体（永久移除，不再重生）。
+        // 分裂实体的分身跟着主脑一起走——玩家眼里这是一个球，不能拆散。
         const removed = excessToRemove(alive, target);
         if (removed.length > 0) {
             log('数量', `超编永久移除 ${removed.length} 个 AI（不是被吃）：`
                 + removed.map((v) => `${v.name} r=${v.r.toFixed(0)}`).join('、'), 'warn');
         }
         for (const victim of removed) {
-            victim.alive = false;
-            victim.respawnAt = Infinity;
-            this.ai = this.ai.filter((ai) => ai !== victim);
-            this.balls = this.balls.filter((ball) => ball !== victim);
+            for (const cell of this.ai) {
+                if (cell.ownerId === victim.ownerId) {
+                    cell.alive = false;
+                    cell.respawnAt = Infinity;
+                }
+            }
+            this.ai = this.ai.filter((ai) => ai.ownerId !== victim.ownerId);
+            this.balls = this.balls.filter((ball) => ball.ownerId !== victim.ownerId);
             this.rosterDirty = true;
         }
     }
@@ -417,6 +433,10 @@ export class World {
         ai.targetBall = null;
         ai.targetFood = null;
         ai.escapeFood = null;
+        // 重生成全新实体：回到单细胞主脑，分裂冷却清零（与玩家组 respawnGroup 同语义）
+        ai.leader = null;
+        ai.lastSplitAt = -Infinity;
+        ai.splitWish = false;
         ai.grantShield(AI.respawnShield, this.time);
         this.rosterDirty = true; // 重生改名，联机要广播 roster
     }
@@ -447,6 +467,25 @@ export class World {
         this.rebuildBalls();
     }
 
+    // AI 实体视图：一个「AI 实体」= 同一 ownerId 的全部存活细胞（主脑 + 分裂分身）。
+    // 排行榜/名次/称王判定都按实体聚合——与玩家组「整组质量折成一条」同口径，
+    // 否则一个分裂的 AI 会占两行、名次也算重。
+    aiEntities() {
+        const byOwner = new Map();
+        for (const ai of this.ai) {
+            if (!ai.alive) {
+                continue;
+            }
+            let entity = byOwner.get(ai.ownerId);
+            if (!entity) {
+                entity = { name: ai.name, mass: 0, alive: true };
+                byOwner.set(ai.ownerId, entity);
+            }
+            entity.mass += ai.mass;
+        }
+        return [...byOwner.values()];
+    }
+
     // 排行榜：每个玩家组建一行，"我"由 localOwnerId 标注（高亮用）
     leaderboard(localOwnerId) {
         const rows = [];
@@ -459,7 +498,7 @@ export class World {
                 });
             }
         }
-        return leaderboardEntries(rows, this.ai);
+        return leaderboardEntries(rows, this.aiEntities());
     }
 
     // ---------- 逻辑更新（固定步长，dt = 1/60） ----------
@@ -483,9 +522,23 @@ export class World {
                 group.stats.playTime += dt;
             }
         }
+        // 先主脑后分身：分身 update 里镜像主脑这一帧的输入，顺序反过来会用到上一帧的。
         for (const ai of this.ai) {
-            if (ai.alive) {
-                ai.update(dt, this.world, this.balls, this.foodList);
+            if (ai.alive && !ai.leader) {
+                ai.update(dt, this.world, this.balls, this.foodList, this.time);
+            }
+        }
+        for (const ai of this.ai) {
+            if (ai.alive && ai.leader) {
+                ai.update(dt, this.world, this.balls, this.foodList, this.time);
+            }
+        }
+        // 消费分裂请求：aiTrySplit 内部有完整把关（冷却/最小半径/实体分身上限），
+        // 这里只管"想分了就来试一次"，成功与否都清掉愿望（下次思考周期会重新评估）。
+        for (const ai of this.ai) {
+            if (ai.alive && !ai.leader && ai.splitWish) {
+                ai.splitWish = false;
+                this.aiTrySplit(ai);
             }
         }
 
@@ -493,6 +546,7 @@ export class World {
         this.eatBalls();
         this.separateBalls();
         this.mergePlayerCells();
+        this.mergeAiCells();
 
         this.updateRespawn();
         this.syncTimer -= dt;
@@ -505,7 +559,7 @@ export class World {
         // 只判玩家组（AI 再大也只是"被 AI 卡住"，不结束对局）。
         for (const group of this.groups.values()) {
             if (group.cells.some((cell) => cell.alive)
-                && isCrowned(groupMass(group.cells), this.ai)) {
+                && isCrowned(groupMass(group.cells), this.aiEntities())) {
                 this.onEvent({ type: 'crowned', ownerId: group.ownerId });
             }
         }
@@ -561,12 +615,7 @@ export class World {
                 group.stats.kills += eaten.get(cell) || 0;
             }
         }
-        for (const victim of victims) {
-            // 玩家组的细胞不用安排重生（组全灭走 eaten 事件）；AI 延时重生
-            if (!this.groups.has(victim.ownerId)) {
-                victim.respawnAt = this.time + AI.respawnDelay;
-            }
-        }
+        this.settleAiDeaths(victims);
         this.rebuildBalls();
 
         // 全灭的组：广播事件（要不要进演出/结算由表现层定）
@@ -577,10 +626,140 @@ export class World {
                     type: 'eaten',
                     ownerId: group.ownerId,
                     mass: massBefore.get(group.ownerId),
-                    rank: rankOfGroup(massBefore.get(group.ownerId), this.ai),
+                    rank: rankOfGroup(massBefore.get(group.ownerId), this.aiEntities()),
                     by: killer || null,
                 });
             }
+        }
+    }
+
+    // AI 的死亡结算。AI 是「实体」（主脑 + 分裂分身），与单球时代不同：
+    //   · 只死一颗分身、实体还有活人 → 死细胞直接移出列表（不排队重生——重生的
+    //     是实体，不是某颗细胞）；
+    //   · 主脑死了但分身还在   → 分身递补成主脑（立即重新决策，分裂冷却延续）；
+    //   · 整组死绝             → 只排**一次**重生（用主脑当载体；同帧被吃的其他
+    //     细胞直接消失，否则两颗死细胞各自重生 = 实体凭空翻倍）。
+    // 按 ownerId 分组结算，因为同一实体的多颗细胞可能同帧被吃。
+    settleAiDeaths(victims) {
+        const aiVictims = victims.filter((victim) => !this.groups.has(victim.ownerId));
+        const byOwner = new Map();
+        for (const victim of aiVictims) {
+            const list = byOwner.get(victim.ownerId);
+            if (list) {
+                list.push(victim);
+            } else {
+                byOwner.set(victim.ownerId, [victim]);
+            }
+        }
+        for (const [ownerId, list] of byOwner) {
+            const survivors = this.ai.filter((ai) => ai.alive && ai.ownerId === ownerId);
+            if (survivors.length > 0) {
+                const fallenPrimary = list.find((victim) => !victim.leader);
+                if (fallenPrimary) {
+                    this.promoteAi(survivors[0], fallenPrimary);
+                }
+                this.ai = this.ai.filter((ai) => !list.includes(ai));
+                continue;
+            }
+            // 整组死绝：主脑当重生载体，其余死细胞当场移除
+            const carrier = list.find((victim) => !victim.leader) || list[0];
+            carrier.leader = null;
+            carrier.respawnAt = this.time + AI.respawnDelay;
+            this.ai = this.ai.filter((ai) => ai === carrier || !list.includes(ai));
+        }
+    }
+
+    // 分身递补成主脑：继承分裂冷却（lastSplitAt），决策状态不搬——
+    // thinkTimer 清零让它下一帧立刻重新决策（分身本来就没有大脑，旧目标是主脑的遗物）。
+    promoteAi(survivor, fallen) {
+        survivor.leader = null;
+        survivor.lastSplitAt = fallen.lastSplitAt;
+        survivor.thinkTimer = 0;
+        survivor.splitWish = false;
+    }
+
+    // AI 分裂捕猎的执行入口（决策在 AiPlayer.think，几何判定在 rules.aiSplitWindow）。
+    // 与玩家 requestSplit 同一套把关（rules.splitStatus），差异只有三点：
+    //   · 上限用 AI.maxCells（比玩家的 SPLIT.maxCells 小，见 config）；
+    //   · 分开轴正对猎物：splitCells 朝 dir 的垂直方向分开，这里传「指向猎物的
+    //     垂直向量」，于是靠猎物那半相当于扑出去（玩家是垂直于移动方向，纯手感）；
+    //   · 切出的新细胞是「分身」（leader = 主脑），不独立决策、镜像主脑输入。
+    aiTrySplit(ai) {
+        if (!this.aiSplit) {
+            return false; // 开局界面关了「AI 分裂」：只挡执行，决策层照常（开销可忽略）
+        }
+        if (ai.leader) {
+            return false;
+        }
+        const prey = ai.targetBall;
+        if (!prey || !prey.alive) {
+            return false;
+        }
+        const cells = this.ai.filter((cell) => cell.alive && cell.ownerId === ai.ownerId);
+        if (!splitStatus(cells, this.time, ai.lastSplitAt, AI.maxCells).canSplit) {
+            return false;
+        }
+        const dx = prey.x - ai.x;
+        const dy = prey.y - ai.y;
+        const len = Math.hypot(dx, dy) || 1;
+        // splitCells 的分开方向 = (dirX, dirY) 的垂直方向 → 传垂直向量，分开轴就是猎物方向
+        const dirX = -dy / len;
+        const dirY = dx / len;
+        const out = splitCells(cells, dirX, dirY, (x, y, r, from) => {
+            const cell = new AiPlayer(x, y, r, from.bColor, ai.name);
+            cell.ownerId = ai.ownerId;
+            cell.leader = ai;
+            cell.foodGain = ai.foodGain;
+            cell.eatBonus = ai.eatBonus;
+            return cell;
+        });
+        const fresh = out.filter((cell) => !cells.includes(cell));
+        for (const cell of out) {
+            cell.mergeAfter = this.time + SPLIT.mergeCooldown;
+            cell.lastSplitAt = this.time;
+        }
+        this.ai.push(...fresh);
+        this.rebuildBalls();
+        log('分裂', `${ai.name} 分裂捕猎（→ ${prey.name || '无名'}）：`
+            + `${cells.length} → ${out.length} 颗细胞，主脑 r=${ai.r.toFixed(0)}`);
+        return true;
+    }
+
+    // 分身靠拢后自动合并回主脑（玩家组的 mergePlayerCells 同款，按 ownerId 分组）。
+    // 主脑永远排在组首：mergeCells 保留先出现的细胞，主脑必须活下来——
+    // 它持有决策状态，被并掉的话实体就成了没脑子的分身集群。
+    mergeAiCells() {
+        let dirty = false;
+        const byOwner = new Map();
+        for (const ai of this.ai) {
+            if (!ai.alive) {
+                continue;
+            }
+            const list = byOwner.get(ai.ownerId);
+            if (list) {
+                list.push(ai);
+            } else {
+                byOwner.set(ai.ownerId, [ai]);
+            }
+        }
+        for (const list of byOwner.values()) {
+            if (list.length < 2) {
+                continue;
+            }
+            list.sort((a, b) => (a.leader ? 1 : 0) - (b.leader ? 1 : 0));
+            const result = mergeCells(list, this.time);
+            if (result.merged === 0) {
+                continue;
+            }
+            const gone = list.filter((cell) => !result.cells.includes(cell));
+            for (const cell of gone) {
+                cell.alive = false; // 被并掉：不进重生队列
+            }
+            this.ai = this.ai.filter((cell) => !gone.includes(cell));
+            dirty = true;
+        }
+        if (dirty) {
+            this.rebuildBalls();
         }
     }
 }

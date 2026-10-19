@@ -188,7 +188,8 @@ function buildRoster() {
         entries.push([group.ownerId, group.name]);
     }
     for (const ai of world.ai) {
-        if (ai.alive) {
+        // 分裂分身与主脑共享 ownerId：只发主脑，客户端 Map 按 ownerId 取名不会漏
+        if (ai.alive && !ai.leader) {
             entries.push([ai.ownerId, ai.name]);
         }
     }

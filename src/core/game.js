@@ -299,11 +299,18 @@ export class Game {
     // ---------- 生命周期 ----------
 
     // 从开局界面进入游戏（单机）
-    begin(name, difficulty) {
+    // options.aiSplit：开局界面的「AI 分裂」开关，缺省开。只影响本地世界——
+    // 它是玩家偏好、不是玩法数值，所以**不进 config.js**（否则联机 configHash 比对
+    // 会被单机玩过的偏好污染，客户端自己都过不去）。
+    begin(name, difficulty, options = {}) {
         if (!this.world) {
             this.initLocalWorld(); // 联机退出后回来玩单机：现建本地世界
         }
         this.setDifficulty(difficulty);
+        this.world.aiSplit = options.aiSplit !== false;
+        if (!this.world.aiSplit) {
+            log('分裂', 'AI 分裂已关闭（开局设置）');
+        }
         if (name) {
             this.world.renameGroup(PLAYER_OWNER, name);
         }
@@ -535,17 +542,18 @@ export class Game {
         }
         this.snapshotTimer = 0;
         let top = 0;
-        for (const ai of world.ai) {
-            if (ai.alive && ai.mass > top) {
-                top = ai.mass;
+        const aiEntities = world.aiEntities();
+        for (const entity of aiEntities) {
+            if (entity.mass > top) {
+                top = entity.mass;
             }
         }
         logSnapshot(() => ({
             mass: Math.round(this.playerMass()),
             rank: this.myCells().some((cell) => cell.alive)
-                ? rankOfGroup(this.playerMass(), world.ai)
+                ? rankOfGroup(this.playerMass(), aiEntities)
                 : '-',
-            alive: world.ai.filter((ai) => ai.alive).length,
+            alive: aiEntities.length,
             topAi: Math.round(top),
             fps: Math.round(1 / dt),
             frameMs: this.frameMs.toFixed(1),

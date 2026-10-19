@@ -344,7 +344,9 @@ export class NetWorld {
         return this.groups.get(this.myOwnerId) || null;
     }
 
-    // 自己的名次（全场按整组质量排，AI 也算）：称王全场结算用
+    // 自己的名次（全场按整组质量排，AI 也算）：称王全场结算用。
+    // AI 按**实体**聚合（同一 ownerId 的分身质量相加），与玩家组同口径——
+    // 否则一个分裂的 AI 会计两次名次。
     myRank() {
         const mine = this.myGroup();
         if (!mine) {
@@ -360,12 +362,30 @@ export class NetWorld {
                 rank += 1;
             }
         }
-        for (const ai of this.ai) {
-            if (ai.alive && ai.mass > myMass) {
+        for (const entity of this.aiEntities()) {
+            if (entity.mass > myMass) {
                 rank += 1;
             }
         }
         return rank;
+    }
+
+    // 与 core/World.aiEntities 同构：按 ownerId 聚合 AI 分身，实体级质量。
+    // 快照里 AI 细胞可能共享 ownerId（AI 会分裂），ghost 列表本身是平的。
+    aiEntities() {
+        const byOwner = new Map();
+        for (const ai of this.ai) {
+            if (!ai.alive) {
+                continue;
+            }
+            let entity = byOwner.get(ai.ownerId);
+            if (!entity) {
+                entity = { name: ai.name, mass: 0, alive: true };
+                byOwner.set(ai.ownerId, entity);
+            }
+            entity.mass += ai.mass;
+        }
+        return [...byOwner.values()];
     }
 
     applyRoster(entries) {

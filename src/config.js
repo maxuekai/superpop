@@ -205,15 +205,19 @@ export const DIFFICULTY = {
         foodGain: 0.26,
         minCount: 5,
         count: 9,
+        // easy 不分裂：直退是最好懂的走位——新手要先学会"被大球追会直线跑"，
+        // 不会分裂的 AI 也最好抓（被吃 116/120 的锚点不依赖它，但别给新手加戏）
+        splitChance: 0,
         // easy 不绕：直退是最好懂的走位，也最容易被玩家读出来按住追
         fleeOrbit: 0,
     },
     normal: {
         label: '普通',
         // ⚠ 这一档必须与 AI.* 的默认值**逐项相同**（fleeRange 160 / thinkInterval 0.1 /
-        //    escapeSamples 16 / escapeProbe 180 / escapeChange 0.25 / fleeOrbit 0.4）。
+        //    escapeSamples 16 / escapeProbe 180 / escapeChange 0.25 / fleeOrbit 0.4 /
+        //    splitChance 0.25）。
         //    它是默认档和历史验收锚点，difficulty-report 会拿"不带 flag 的 flee-sim"
-        //    当参照逐位比对，漂了就报出来。
+        //    当参照逐位比对，漂了就报出来（splitChance 仿真量不到，由 invariants 盯）。
         fleeRange: 160,
         thinkInterval: 0.1,
         escapeSamples: 16,
@@ -224,6 +228,9 @@ export const DIFFICULTY = {
         foodGain: 0.3,
         minCount: 6,
         count: 12,
+        // ⚠ 与 AI.splitChance 默认值**逐项相同**（它是默认档锚点）——
+        // 这个参数仿真量不到（World 层行为），只能靠这条纪律防漂
+        splitChance: 0.25,
         fleeOrbit: 0.4,
     },
     hard: {
@@ -243,6 +250,9 @@ export const DIFFICULTY = {
         foodGain: 0.34,
         minCount: 7,
         count: 14,
+        // 扑食更凶：猎手档不仅要难被抓，也要会主动开张（真机对局里 hard AI
+        // 分裂扑人是主要压力来源之一；0.5 = 猎物停在窗口里约 1s 内基本必分）
+        splitChance: 0.5,
         // 绕得比 normal 更狠（配合更小的 fleeRange：晚逃 + 敢绕）
         fleeOrbit: 0.65,
     },
@@ -330,6 +340,17 @@ export const AI = {
     fleeOrbitNear: 60,
     // 追击时瞄猎物前方 chaseLead 秒后的位置（0 = 只追当前坐标）
     chaseLead: 0.25,
+    // 分裂捕猎：追击时猎物落在「普通臂展够不着、但分裂够得着」的窗口里
+    // （rules.aiSplitReach 算额外臂展，切完的一半仍须满足 EAT.ratio 才吃得到），
+    // 按 thinkInterval 的频率以该概率请求分裂，两半朝猎物轴甩开（agar.io 式扑食）。
+    // 完整的执行把关在 World.aiTrySplit：冷却 / 最小半径 / 分身上限与玩家同一套
+    // splitStatus——这里只是「想不想分」。0 = 从不分（easy 档用）。
+    // ⚠ 这是 World 层行为：flee-sim / food-sim 跑的是孤立单球、没有 World，
+    //   分裂对难度梯度的影响这两个仿真看不见，只能靠真机对局体感化。
+    splitChance: 0.25,
+    // 单个 AI 实体（主脑 + 分裂分身）最多同时存在的细胞数。玩家上限是 SPLIT.maxCells(8)，
+    // AI 取 4：同屏 12 个 AI 若也能分 8 颗，碰撞列表与联机快照都会翻倍。
+    maxCells: 4,
     // 追击更小球 / 逃离更大球的判定距离（世界单位）
     // fleeRange 是手感关键：太大则 AI 一看见你就全程逃、永远吃不到人；太小则 AI 懒得躲
     chaseRange: 560,

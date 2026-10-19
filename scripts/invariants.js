@@ -124,6 +124,28 @@ add('AI 觅食收益不超过玩家', 'AI.foodGain > PLAYER.growthPerFood 意味
         + '同量食物下 AI 会比玩家长得快。');
 });
 
+add('AI 分裂参数范围合法', 'splitChance 是概率（>1 = 每思考周期必分、<0 = 永不分，都是死参数）；'
+    + 'maxCells ≥2（1 等于功能关闭）且 ≤ SPLIT.maxCells——AI 比玩家分身还多会压爆碰撞列表与联机带宽', () => {
+    assert(AI.splitChance >= 0 && AI.splitChance <= 1, `AI.splitChance=${AI.splitChance}，必须在 [0,1]`);
+    assert(AI.maxCells >= 2 && AI.maxCells <= SPLIT.maxCells,
+        `AI.maxCells=${AI.maxCells}，应在 [2, SPLIT.maxCells=${SPLIT.maxCells}]`);
+});
+
+add('难度档位的 splitChance 合法且 normal 档等于默认值', 'splitChance 是 World 层行为，'
+    + 'flee-sim / food-sim 跑孤立单球、量不到它——difficulty-report 的「normal=默认」比对'
+    + '覆盖不到这个参数，一致性只能由这条断言钉住（其余参数有行为比对兜底）', () => {
+    for (const [key, preset] of Object.entries(DIFFICULTY)) {
+        if (!('splitChance' in preset)) {
+            continue;
+        }
+        assert(preset.splitChance >= 0 && preset.splitChance <= 1,
+            `难度档 "${key}" 的 splitChance=${preset.splitChance} 超出 [0,1]`);
+    }
+    assert(DIFFICULTY.normal.splitChance === AI.splitChance,
+        `DIFFICULTY.normal.splitChance=${DIFFICULTY.normal.splitChance} ≠ AI.splitChance=${AI.splitChance}，`
+        + '默认档必须与 AI 默认值一致。');
+});
+
 // ── 跑 ──────────────────────────────────────────────────────
 
 let failed = 0;

@@ -41,9 +41,15 @@ export class Hud {
         this.menuBtn = root.querySelector('.menu-btn');
 
         // 难度选择（开局界面）：纯 UI 状态，点哪个把哪个传给游戏
-        this.diffBtns = [...root.querySelectorAll('.diff-btn')];
+        this.diffBtns = [...root.querySelectorAll('.diff-btn:not(.aisplit-btn)')];
         this.difficulty = DEFAULT_DIFFICULTY;
         this.difficultyRow = root.querySelector('.difficulty');
+
+        // AI 分裂开关（开局界面）：默认开；关掉后本地世界的 aiTrySplit 直接拒绝。
+        // 与难度行一样在联机模式藏起——服务端权威，这个偏好带不过去。
+        this.aiSplitBtns = [...root.querySelectorAll('.aisplit-btn')];
+        this.aiSplit = true;
+        this.aiSplitRow = root.querySelector('.ai-split-row');
 
         // 模式选择（单机 / 联机）与联机错误提示
         this.mode = 'single';
@@ -67,14 +73,18 @@ export class Hud {
         for (const btn of this.diffBtns) {
             btn.addEventListener('click', () => this.pickDifficulty(btn.dataset.diff));
         }
+        for (const btn of this.aiSplitBtns) {
+            btn.addEventListener('click', () => this.pickAiSplit(btn.dataset.aisplit === 'on'));
+        }
         for (const btn of this.modeBtns) {
             btn.addEventListener('click', () => this.pickMode(btn.dataset.mode));
         }
         this.syncDifficulty();
+        this.syncAiSplit();
         this.syncMode();
         const fire = () => {
             this.releaseFocus();
-            handler(this.readName(this.startInput), this.difficulty);
+            handler(this.readName(this.startInput), this.difficulty, this.aiSplit);
         };
         if (this.startBtn) {
             this.startBtn.addEventListener('click', fire);
@@ -99,8 +109,12 @@ export class Hud {
         for (const btn of this.modeBtns) {
             btn.classList.toggle('active', btn.dataset.mode === this.mode);
         }
+        // 联机不收单机参数（难度 / AI 分裂开关），两行一起藏
         if (this.difficultyRow) {
             this.difficultyRow.classList.toggle('hidden', this.mode !== 'single');
+        }
+        if (this.aiSplitRow) {
+            this.aiSplitRow.classList.toggle('hidden', this.mode !== 'single');
         }
     }
 
@@ -121,6 +135,17 @@ export class Hud {
     syncDifficulty() {
         for (const btn of this.diffBtns) {
             btn.classList.toggle('active', btn.dataset.diff === this.difficulty);
+        }
+    }
+
+    pickAiSplit(on) {
+        this.aiSplit = on !== false;
+        this.syncAiSplit();
+    }
+
+    syncAiSplit() {
+        for (const btn of this.aiSplitBtns) {
+            btn.classList.toggle('active', (btn.dataset.aisplit === 'on') === this.aiSplit);
         }
     }
 

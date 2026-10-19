@@ -71,12 +71,12 @@ window.addEventListener('load', () => {
     }, { passive: false });
 
     // 开局 / 结算界面的按钮把操作转交给游戏。
-    // 注意要把 difficulty 一并传下去：曾有一版只写 (name)，难度选择器点了
+    // 注意要把 difficulty / aiSplit 一并传下去：曾有一版只写 (name)，难度选择器点了
     // 也不生效（setDifficulty(undefined) 静默回落 normal），纯 UI 自嗨。
     // 联机走动态 import：单机玩家不付网络层的加载成本。
-    hud.onStart(async (name, difficulty) => {
+    hud.onStart(async (name, difficulty, aiSplit) => {
         if (hud.mode !== 'online') {
-            game.begin(name, difficulty);
+            game.begin(name, difficulty, { aiSplit });
             return;
         }
         hud.showNetError('');

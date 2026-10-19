@@ -1,4 +1,4 @@
-import { AI, HUD, KING, PLAYER, SPLIT } from '../config.js';
+import { AI, EAT, HUD, KING, PLAYER, SPLIT } from '../config.js';
 import { clamp, capRadius, distance } from './utils.js';
 
 // 玩法裁定层：把「一帧内发生什么」写成纯函数，不碰 canvas / DOM，
@@ -94,16 +94,64 @@ export function rankOfGroup(mass, others) {
 // reason 必须区分出来：只给 canSplit 的话，"已达分身上限"和"球还太小"都会让按钮
 // 无声消失，玩家看到的就是"按钮不见了"——和最初的"按了没反应"是同一种体验。
 // 规则放这里而不是 Game 里，是为了能单测（core 不碰 DOM）。
-export function splitStatus(cells, now, lastSplitAt) {
+// maxCells 缺省用 SPLIT.maxCells；AI 分裂传 AI.maxCells（上限更低，见 config）。
+export function splitStatus(cells, now, lastSplitAt, maxCells = SPLIT.maxCells) {
     const cooldownLeft = Math.max(0, SPLIT.cooldown - (now - lastSplitAt));
     const cooling = cooldownLeft > 0.05;
-    const atCellLimit = cells.length >= SPLIT.maxCells;
+    const atCellLimit = cells.length >= maxCells;
     return {
-        canSplit: canSplit(cells, now, lastSplitAt),
+        canSplit: canSplit(cells, now, lastSplitAt, maxCells),
         cooldownLeft,
         cooling,
         atCellLimit,
     };
+}
+
+// 现在能不能分裂：需要有够大的细胞，且冷却结束，且没超过细胞数上限
+export function canSplit(cells, now, lastSplitAt, maxCells = SPLIT.maxCells) {
+    if (now - lastSplitAt < SPLIT.cooldown) {
+        return false;
+    }
+    if (cells.length >= maxCells) {
+        return false;
+    }
+    return cells.some((cell) => cell.alive && cell.r >= SPLIT.minCellRadius);
+}
+
+// ---------- AI 分裂捕猎 ----------
+// 决策的几何部分（纯函数，AiPlayer.think 调用后自己叠加概率门 AI.splitChance）。
+// 口径：猎物在「普通臂展够不着、但分裂够得着」的窗口里，且切完的一半仍满足互吃比例。
+// 与玩家分裂的差异：玩家两半垂直于**移动方向**分开（手感），AI 由 World 传
+// 「指向猎物的垂直向量」当 dir，于是分开轴正对猎物——靠猎物那半相当于扑出去。
+
+// 分裂比直接追多出来的臂展（世界单位）：靠猎物那半的中心被甩到
+// (separation + 1) × 新半径 远处（中心偏移 separation × 新半径 + 自身半径），
+// 比普通臂展 r + 猎物r 多出 (separation+1) × r/√2 − r，再加上切开的外冲位移
+// （公式与 splitCells 的 push 逐字一致：单侧总位移 = pushSpeed × pushTime / 2 × √(新r/初始r)）。
+export function aiSplitReach(eaterR) {
+    const halfR = eaterR / Math.SQRT2;
+    const lunge = SPLIT.pushSpeed * SPLIT.pushTime / 2 * Math.sqrt(halfR / PLAYER.radius);
+    return (SPLIT.separation + 1) * halfR - eaterR + lunge;
+}
+
+// 现在这颗细胞分裂捕猎值不值（不含概率门与冷却，那些在 think / World 把关）。
+// 返回 { ok, reason } 是为了可测：窗口太远/猎物有护盾/切完吃不动，是三种不同的"不分"。
+export function aiSplitWindow(cell, prey, now) {
+    if (!prey || !prey.alive) {
+        return { ok: false, reason: 'no-prey' };
+    }
+    if (prey.isProtected(now)) {
+        return { ok: false, reason: 'prey-shielded' };
+    }
+    // 切完一半的质量是原来的一半：半径 = r/√2，仍须满足 EAT.ratio 才吃得到猎物
+    if (cell.r <= prey.r * EAT.ratio * Math.SQRT2) {
+        return { ok: false, reason: 'half-cant-eat' };
+    }
+    const gap = distance(cell.x, cell.y, prey.x, prey.y);
+    if (gap > cell.r + prey.r + aiSplitReach(cell.r)) {
+        return { ok: false, reason: 'out-of-reach' };
+    }
+    return { ok: true, reason: 'ok' };
 }
 
 // 排行榜：rows 是已经折好的「玩家组」行（每个组一条：name / weight / isPlayer），
@@ -174,16 +222,7 @@ export function groupMass(cells) {
     return total;
 }
 
-// 现在能不能分裂：需要有够大的细胞，且冷却结束，且没超过细胞数上限
-export function canSplit(cells, now, lastSplitAt) {
-    if (now - lastSplitAt < SPLIT.cooldown) {
-        return false;
-    }
-    if (cells.length >= SPLIT.maxCells) {
-        return false;
-    }
-    return cells.some((cell) => cell.alive && cell.r >= SPLIT.minCellRadius);
-}
+// 现在能不能分裂：见上方 splitStatus 一节（AI 分裂用同一个入口、只是上限不同）。
 
 // 分裂：把所有够大的细胞一切两半，朝当前移动方向的垂直方向分开（避免挡住去路）。
 // 几何要点（改这三个数前先看 config.js 里的注释，值都是实测出来的）：

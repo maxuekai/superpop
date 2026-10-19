@@ -9,6 +9,8 @@ import { Camera } from '../src/core/camera.js';
 import { Player } from '../src/core/player.js';
 import { cellKey, decodeBall, encodeBall } from '../src/core/protocol.js';
 import {
+    aiSplitReach,
+    aiSplitWindow,
     canSplit,
     dueRespawns,
     excessToRemove,
@@ -1878,6 +1880,318 @@ test('细胞 cid 生命周期——分裂保留原球 cid、合并只留一个�
     const beforeRespawn = group.cells[0].cid;
     world.respawnGroup('A');
     assert.notEqual(group.cells[0].cid, beforeRespawn, '重生是新的细胞身份');
+});
+
+// ---------- AI 分裂捕猎（agar.io 式扑食：猎物在"分裂才够得着"的窗口里就切半扑出） ----------
+
+// 窗口几何（rules.aiSplitWindow）：够得着 / 太远 / 切完吃不动 / 猎物有盾 / 猎物已死
+test('AI 分裂窗口：猎物在普通臂展外、分裂臂展内才算够得着', () => {
+    const hunter = ball(500, 500, 30, 'hunter'); // 切完一半 r≈21.2
+    const close = ball(560, 500, 10, 'prey'); // gap 60
+    const far = ball(500 + 500, 500, 10, 'prey'); // gap 500，远超分裂臂展
+    const reach = aiSplitReach(30);
+    assert.ok(reach > 0, '分裂应比直接追多出一截臂展');
+    assert.equal(aiSplitWindow(hunter, close, 0).ok, true, `gap 60 ≤ 30+10+${reach.toFixed(0)}，应判定够得着`);
+    assert.equal(aiSplitWindow(hunter, far, 0).reason, 'out-of-reach');
+    assert.equal(aiSplitWindow(hunter, null, 0).reason, 'no-prey');
+    const dead = ball(560, 500, 10, 'prey');
+    dead.alive = false;
+    assert.equal(aiSplitWindow(hunter, dead, 0).reason, 'no-prey');
+});
+
+test('AI 分裂窗口：切完的一半仍须满足互吃比例（否则白切）', () => {
+    // r=20 追 r=13：直接吃能吃（20 > 13×1.15），但切完一半 r≈14.1 < 13×1.15=14.95
+    const hunter = ball(500, 500, 20, 'hunter');
+    const prey = ball(540, 500, 13, 'prey');
+    assert.equal(aiSplitWindow(hunter, prey, 0).reason, 'half-cant-eat');
+});
+
+test('AI 分裂窗口：出生保护期的猎物不分（切了也吃不到，纯浪费）', () => {
+    const hunter = ball(500, 500, 30, 'hunter');
+    const prey = ball(560, 500, 10, 'prey');
+    prey.grantShield(3, 5); // 世界时间 5 时还有 3 秒保护
+    assert.equal(aiSplitWindow(hunter, prey, 5).reason, 'prey-shielded');
+    assert.equal(aiSplitWindow(hunter, prey, 9).ok, true, '保护过期后窗口恢复');
+});
+
+// 决策（AiPlayer.think）：追击 + 窗口内 + 概率门 + 冷却门 → splitWish；
+// 逃跑 / 无猎物 / chance=0 / 冷却中 → 不许愿
+test('AI 分裂决策：猎物在窗口里才请求分裂，且要过概率门与冷却门', () => {
+    const savedChance = AI.splitChance;
+    const world = { width: WORLD.width, height: WORLD.height };
+    try {
+        AI.splitChance = 1;
+        const hunter = ai(500, 500, 30);
+        const prey = ball(560, 500, 10, 'prey');
+        hunter.think([hunter, prey], [], 5);
+        assert.equal(hunter.splitWish, true, '窗口内 + 概率 1 + 冷却外 → 请求分裂');
+
+        hunter.lastSplitAt = 5; // 刚分过，冷却中
+        hunter.think([hunter, prey], [], 5.1);
+        assert.equal(hunter.splitWish, false, '冷却中不再请求（窗口期每 0.1s 评估一次，别白烧随机数）');
+        hunter.lastSplitAt = -Infinity;
+
+        const farPrey = ball(500 + 500, 500, 10, 'prey');
+        hunter.think([hunter, farPrey], [], 5);
+        assert.equal(hunter.splitWish, false, '够不着的猎物不分');
+
+        const threat = ball(520, 500, 40, 'boss');
+        hunter.think([hunter, prey, threat], [], 5);
+        assert.equal(hunter.splitWish, false, '逃命中不分（威胁分支优先级最高）');
+
+        AI.splitChance = 0;
+        const easyHunter = ai(500, 500, 30);
+        easyHunter.think([easyHunter, prey], [], 5);
+        assert.equal(easyHunter.splitWish, false, 'splitChance=0（easy 档）从不请求');
+    } finally {
+        AI.splitChance = savedChance;
+    }
+});
+
+// 执行（World.aiTrySplit）：与玩家同一套把关（冷却/最小半径/上限），
+// 差异 = 上限用 AI.maxCells、分开轴正对猎物、新细胞是镜像主脑的分身
+test('World：AI 分裂朝猎物轴甩开，新细胞是共享 ownerId 的分身，质量守恒', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40; // 1600kg → 两半各 800kg
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560; // 猎物在正右方
+    prey.y = 500;
+    world.rebuildBalls();
+    hunter.targetBall = prey;
+    const massBefore = hunter.mass;
+
+    assert.equal(world.aiTrySplit(hunter), true);
+    const cells = world.ai.filter((a) => a.ownerId === hunter.ownerId);
+    assert.equal(cells.length, 2, '一颗细胞分成两颗');
+    assert.ok(Math.abs(cells[0].mass + cells[1].mass - massBefore) < 1e-6, '质量守恒');
+    const drone = cells.find((c) => c !== hunter);
+    assert.equal(drone.leader, hunter, '新细胞是分身，主脑还是原来那颗');
+    assert.equal(drone.ownerId, hunter.ownerId, '分身与主脑共享 ownerId（彼此不互吃）');
+    assert.ok(Math.abs(drone.y - hunter.y) < 1e-6, '分开轴是猎物方向 → 两半应在 x 上拉开');
+    assert.ok(Math.abs(drone.x - hunter.x) > 1, '两半确实分开了');
+    assert.equal(world.aiTrySplit(hunter), false, '刚分完在冷却中，不能再分');
+    for (const cell of cells) {
+        assert.equal(cell.lastSplitAt, world.time, '实体内所有细胞的冷却同步（递补时不丢）');
+    }
+    assert.equal(world.ai.length, 2, 'AI 列表加上了分身');
+    assert.equal(world.balls.length, 3, '碰撞列表 = 主脑 + 分身 + 猎物组的细胞');
+});
+
+test('World：AI 分裂受 AI.maxCells 上限约束（比玩家的 SPLIT.maxCells 小）', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 60;
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+
+    assert.ok(AI.maxCells < SPLIT.maxCells, 'AI 上限必须小于玩家上限（带宽与碰撞列表）');
+    while (world.ai.filter((a) => a.ownerId === hunter.ownerId).length < AI.maxCells) {
+        for (const cell of world.ai.filter((a) => a.ownerId === hunter.ownerId)) {
+            cell.r = 60; // 每次切完半径减半，补回来才能继续分
+        }
+        world.time += SPLIT.cooldown; // 跳过冷却
+        hunter.lastSplitAt = -Infinity;
+        assert.equal(world.aiTrySplit(hunter), true, '未满上限时应能继续分');
+    }
+    world.time += SPLIT.cooldown;
+    hunter.lastSplitAt = -Infinity;
+    for (const cell of world.ai.filter((a) => a.ownerId === hunter.ownerId)) {
+        cell.r = 60;
+    }
+    assert.equal(world.aiTrySplit(hunter), false, '达到 AI.maxCells 后拒绝再分');
+});
+
+test('World：AI 分身镜像主脑输入，自己不思考', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40;
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+    world.aiTrySplit(hunter);
+    const drone = world.ai.find((a) => a.leader === hunter);
+
+    world.update(STEP); // 主脑 think+steer 后，分身镜像同一帧的输入
+    assert.equal(drone.speedX, hunter.speedX, '分身输入与主脑逐位一致');
+    assert.equal(drone.speedY, hunter.speedY);
+    const thinkTimerBefore = drone.thinkTimer;
+    world.update(STEP);
+    assert.equal(drone.thinkTimer, thinkTimerBefore, '分身不跑 think（thinkTimer 不走）');
+});
+
+test('World：主脑被吃 → 分身递补成主脑，分裂冷却延续', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40;
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+    world.aiTrySplit(hunter);
+    const drone = world.ai.find((a) => a.leader === hunter);
+    drone.x = 760; // 拉远，让杀手只够得着主脑
+    drone.y = 500;
+    const cooldownAtSplit = hunter.lastSplitAt;
+
+    const killer = new Ball(500, 500, 60, '#000', '杀手', 'killer-owner');
+    world.balls.push(killer);
+    world.update(STEP);
+
+    assert.equal(hunter.alive, false, '主脑被吃掉');
+    assert.equal(drone.alive, true, '分身还活着');
+    assert.equal(drone.leader, null, '分身递补成主脑');
+    assert.equal(drone.lastSplitAt, cooldownAtSplit, '分裂冷却延续（实体没变，只是换了主脑）');
+    assert.equal(drone.thinkTimer, 0, '递补后立刻重新决策');
+    assert.equal(world.ai.filter((a) => a.ownerId === drone.ownerId).length, 1, '死细胞移出列表');
+});
+
+test('World：AI 实体整组被吃 → 只排一次重生（不随细胞数翻倍）', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40;
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+    world.aiTrySplit(hunter);
+
+    const killer = new Ball(500, 500, 300, '#000', '杀手', 'killer-owner');
+    world.balls.push(killer);
+    world.update(STEP);
+
+    const deadCarriers = world.ai.filter((a) => !a.alive);
+    assert.equal(deadCarriers.length, 1, '整组死绝只留一颗重生载体');
+    assert.equal(deadCarriers[0].respawnAt, world.time + AI.respawnDelay, '重生排队一个');
+    // 跑到重生点：实体复活回单细胞，不会变成两颗
+    for (let i = 0; i < AI.respawnDelay / STEP + 2; i += 1) {
+        world.update(STEP);
+    }
+    const revived = world.ai.filter((a) => a.ownerId === hunter.ownerId && a.alive);
+    assert.equal(revived.length, 1, '重生回一颗细胞，不是各重生一颗');
+    assert.equal(revived[0].leader, null, '重生的是主脑');
+    assert.equal(revived[0].lastSplitAt, -Infinity, '分裂冷却清零（全新实体）');
+});
+
+test('World：AI 分身靠近后自动合并回主脑（主脑必须活下来）', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40;
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+    world.aiTrySplit(hunter);
+    const drone = world.ai.find((a) => a.leader === hunter);
+    const totalMass = hunter.mass + drone.mass;
+
+    // 直接摆到合并距离内、冷却清掉
+    drone.x = hunter.x + 1;
+    drone.y = hunter.y;
+    hunter.mergeAfter = -Infinity;
+    drone.mergeAfter = -Infinity;
+    world.mergeAiCells();
+
+    const rest = world.ai.filter((a) => a.ownerId === hunter.ownerId);
+    assert.equal(rest.length, 1, '两颗并回一颗');
+    assert.equal(rest[0].leader, null, '活下来的必须是主脑（它持有决策状态）');
+    assert.ok(Math.abs(rest[0].mass - totalMass) < 1e-6, '合并质量守恒');
+});
+
+test('World：数量平衡按实体计数，分裂不会让 AI 超编被踢', () => {
+    const world = new World();
+    const group = world.addGroup('p', '玩家');
+    group.cells[0].r = PLAYER.radius; // 发展水平 = 出生体型 → 目标数量 = AI.minCount
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40;
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+    world.aiTrySplit(hunter); // 1 实体 2 细胞
+    assert.equal(world.ai.filter((a) => !a.leader).length, 1, '主脑只有一个');
+
+    world.syncTimer = 0; // 强制本帧跑数量校准
+    world.update(STEP);
+
+    const primaries = world.ai.filter((a) => a.alive && !a.leader);
+    assert.equal(primaries.length, targetAiCount(PLAYER.radius), '按实体补到目标数量（分裂的没被算成两个）');
+    assert.ok(world.ai.some((a) => a.ownerId === hunter.ownerId), '分裂的实体没被超编机制踢掉');
+});
+
+test('World：aiSplit 开关——开局界面可关掉 AI 分裂（默认开）', () => {
+    const setup = (aiSplit) => {
+        const world = new World({ aiSplit });
+        world.spawnAi(1);
+        const hunter = world.ai[0];
+        hunter.x = 500;
+        hunter.y = 500;
+        hunter.r = 40;
+        const prey = world.addGroup('prey', '猎物').cells[0];
+        prey.x = 560;
+        prey.y = 500;
+        hunter.targetBall = prey;
+        world.rebuildBalls();
+        return { world, hunter };
+    };
+    const off = setup(false);
+    assert.equal(off.world.aiSplit, false);
+    assert.equal(off.world.aiTrySplit(off.hunter), false, '关掉后 aiTrySplit 拒绝');
+    assert.equal(off.world.ai.length, 1, '关掉后没有分身产生');
+    const on = setup(true);
+    assert.equal(on.world.aiTrySplit(on.hunter), true, '默认/显式开则正常分裂');
+});
+
+test('World：排行榜/实体视图把 AI 分身的质量聚合成一行', () => {
+    const world = new World();
+    world.spawnAi(1);
+    const hunter = world.ai[0];
+    hunter.x = 500;
+    hunter.y = 500;
+    hunter.r = 40; // 1600kg → 分裂后两半各 800kg，实体总质量不变
+    const prey = world.addGroup('prey', '猎物').cells[0];
+    prey.x = 560;
+    prey.y = 500;
+    hunter.targetBall = prey;
+    world.rebuildBalls();
+    world.aiTrySplit(hunter);
+
+    const entities = world.aiEntities();
+    const mine = entities.find((e) => e.name === hunter.name);
+    assert.ok(mine, '分裂的 AI 在实体视图里只有一行');
+    assert.ok(Math.abs(mine.mass - 1600) < 1e-6, '实体质量 = 分身质量之和');
+    const rows = world.leaderboard('p').filter((row) => row.name === hunter.name);
+    assert.equal(rows.length, 1, '排行榜不重复占行');
 });
 
 // ---------- 联机客户端 NetWorld（快照 → 可渲染世界） ----------
